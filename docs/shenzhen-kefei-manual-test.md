@@ -12,11 +12,26 @@
 ## 前置条件
 
 1. 已在白名单服务器上部署最新后端，并确认出网 IP 已加入深圳科飞白名单。
-2. 后台已创建并启用深圳科飞供应商，配置项中的供应商代码为 `shenzhen-kefei`，供应商名称为 `深圳科飞`，协议类型为 `SOHAN_API`。
+2. 已在后端目录执行 `bun run db:seed`。该种子会自动初始化深圳科飞供应商及其基础配置，无需再手工新增供应商。
 3. 深圳科飞后台已录入回调地址 `https://admin.miigo.cn/callbacks/suppliers/shenzhen-kefei`。
 4. 已准备后台管理员 Bearer Token，以及联调用渠道的 `AccessKey`、签名密钥和回调配置。
 5. 白名单服务器已安装 Node.js 或 Bun 环境（用于执行签名生成命令，`node -e` / `bun -e` 二选一）。
-6. 已拿到深圳科飞在本环境的 `supplierId`，下面命令中的 `SUPPLIER_ID` 需要替换成实际 UUID。
+6. 已拿到深圳科飞在本环境的 `supplierId`。如不确定，可通过下方“查询已种子的 supplierId”命令获取。
+
+## 初始化种子
+
+在后端目录执行：
+
+```bash
+cd backend
+bun run db:seed
+```
+
+预期结果：
+
+1. 命令执行成功，无报错退出。
+2. `supplier.suppliers` 中会存在一条 `supplier_code = shenzhen-kefei` 的供应商记录。
+3. `supplier.supplier_configs` 中会存在该供应商对应的配置记录，后续可直接用于余额查询、目录同步和真实履约联调。
 
 ## 建议先设置环境变量
 
@@ -29,6 +44,23 @@ export TIMESTAMP="$(date +%s%3N)"
 export NONCE="manual-kefei-$(date +%s)"
 export CHANNEL_ORDER_NO="manual-kefei-$(date +%Y%m%d%H%M%S)"
 ```
+
+## 查询已种子的 supplierId
+
+执行命令：
+
+```bash
+curl -sS \
+  -X GET "$BASE_URL/admin/suppliers" \
+  -H "Authorization: Bearer $ADMIN_TOKEN"
+```
+
+预期结果：
+
+1. HTTP 状态码为 `200`。
+2. JSON 顶层返回 `code: 0`。
+3. 返回数组中存在 `supplierCode = shenzhen-kefei` 的记录。
+4. 将该记录的 `id` 填入上方环境变量 `SUPPLIER_ID`。
 
 ## 余额查询
 

@@ -44,6 +44,7 @@ describe('管理员登录', () => {
       data?: {
         accessToken?: string;
         refreshToken?: string;
+        expiresInSeconds?: number;
       };
     };
     const sessionRows = await db<{ total: number }[]>`
@@ -57,6 +58,7 @@ describe('管理员登录', () => {
     expect(payload.code).toBe(0);
     expect(payload.data?.accessToken).toBeTruthy();
     expect(payload.data?.refreshToken).toBeTruthy();
+    expect(payload.data?.expiresInSeconds).toBe(env.adminAccessTokenExpiresInSeconds);
     expect(sessionRows[0]?.total).toBe(1);
   });
 });

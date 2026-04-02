@@ -2,12 +2,12 @@ import { notFound } from '@/lib/errors';
 import { logger } from '@/lib/logger';
 import type { WorkerContract } from '@/modules/worker/contracts';
 import type { WorkerRepository } from '@/modules/worker/worker.repository';
-import { recurringWorkerSchedules, toScheduledJobInput } from '@/modules/worker/worker-schedule';
 import type {
   CreateWorkerJobInput,
   WorkerJobHandler,
   WorkerJobType,
 } from '@/modules/worker/worker.types';
+import { recurringWorkerSchedules, toScheduledJobInput } from '@/modules/worker/worker-schedule';
 
 const retryBackoffInSeconds = [1, 5, 10, 30, 60];
 

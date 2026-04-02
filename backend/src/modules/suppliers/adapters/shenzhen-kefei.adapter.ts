@@ -1,8 +1,3 @@
-import type {
-  SupplierAdapter,
-  SupplierBalanceResult,
-  SupplierCatalogSyncResult,
-} from '@/modules/suppliers/adapters/types';
 import {
   buildKefeiPayload,
   decodeKefeiResponse,
@@ -10,6 +5,11 @@ import {
   parseKefeiCallbackForm,
   verifyKefeiCallbackSign,
 } from '@/modules/suppliers/adapters/shenzhen-kefei.protocol';
+import type {
+  SupplierAdapter,
+  SupplierBalanceResult,
+  SupplierCatalogSyncResult,
+} from '@/modules/suppliers/adapters/types';
 
 interface ShenzhenKefeiAdapterOptions {
   baseUrl: string;

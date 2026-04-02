@@ -41,11 +41,7 @@ export interface SupplierAdapter {
     rawCode?: number;
     rawMessage?: string;
   }>;
-  queryOrder(input: {
-    supplierOrderNo: string;
-    attemptIndex: number;
-    orderNo?: string;
-  }): Promise<{
+  queryOrder(input: { supplierOrderNo: string; attemptIndex: number; orderNo?: string }): Promise<{
     status: 'QUERYING' | 'SUCCESS' | 'FAIL';
     reason?: string;
     rawStatusCode?: string;

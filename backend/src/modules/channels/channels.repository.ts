@@ -132,11 +132,7 @@ export class ChannelsRepository {
     `);
   }
 
-  async consumeOpenNonce(input: {
-    accessKey: string;
-    nonce: string;
-    path: string;
-  }): Promise<void> {
+  async consumeOpenNonce(input: { accessKey: string; nonce: string; path: string }): Promise<void> {
     await db`
       INSERT INTO channel.channel_request_nonces (
         id,

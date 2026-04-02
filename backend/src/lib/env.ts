@@ -40,6 +40,22 @@ function parseHost(host: string): { hostname: string; port: number } {
   return { hostname, port };
 }
 
+function readPositiveIntegerEnv(key: string, defaultValue: number): number {
+  const value = Bun.env[key];
+
+  if (!value) {
+    return defaultValue;
+  }
+
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`环境变量 ${key} 必须为正整数，当前值: ${value}`);
+  }
+
+  return parsed;
+}
+
 const postgres = parseHost(readEnv('POSTGRES_HOST'));
 
 export const env = {
@@ -56,6 +72,10 @@ export const env = {
     max: 10,
   },
   adminJwtSecret: readEnv('ADMIN_JWT_SECRET'),
+  adminAccessTokenExpiresInSeconds: readPositiveIntegerEnv(
+    'ADMIN_ACCESS_TOKEN_EXPIRES_IN_SECONDS',
+    24 * 60 * 60,
+  ),
   internalJwtSecret: readEnv('INTERNAL_JWT_SECRET'),
   encryptionKey: readEnv('APP_ENCRYPTION_KEY'),
   seed: {

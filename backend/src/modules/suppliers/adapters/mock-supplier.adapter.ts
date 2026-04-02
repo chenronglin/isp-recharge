@@ -6,11 +6,7 @@ export class MockSupplierAdapter implements SupplierAdapter {
 
   constructor(private readonly mode: MockSupplierMode = 'mock-auto-success') {}
 
-  async submitOrder(_input: {
-    orderNo: string;
-    productId: string;
-    supplierProductCode: string;
-  }) {
+  async submitOrder(_input: { orderNo: string; productId: string; supplierProductCode: string }) {
     return {
       supplierOrderNo: generateBusinessNo('suporder'),
       status: 'ACCEPTED' as const,

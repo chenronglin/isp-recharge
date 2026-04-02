@@ -6,13 +6,10 @@ import type { OrderContract } from '@/modules/orders/contracts';
 import type { OrderRecord } from '@/modules/orders/orders.types';
 import { MockSupplierAdapter } from '@/modules/suppliers/adapters/mock-supplier.adapter';
 import { ShenzhenKefeiAdapter } from '@/modules/suppliers/adapters/shenzhen-kefei.adapter';
-import type {
-  MockSupplierMode,
-  SupplierAdapter,
-} from '@/modules/suppliers/adapters/types';
+import type { MockSupplierMode, SupplierAdapter } from '@/modules/suppliers/adapters/types';
 import type { SupplierContract } from '@/modules/suppliers/contracts';
-import type { SuppliersRepository as Repository } from '@/modules/suppliers/suppliers.repository';
 import { chooseSupplierCandidate } from '@/modules/suppliers/supplier-routing';
+import type { SuppliersRepository as Repository } from '@/modules/suppliers/suppliers.repository';
 import type {
   SupplierCatalogItem,
   SupplierDynamicItem,
@@ -519,9 +516,7 @@ export class SuppliersService implements SupplierContract {
 
       return new ShenzhenKefeiAdapter({
         baseUrl: String(
-          credential.baseUrl ??
-            configJson.baseUrl ??
-            'http://api.sohan.hk:50080/API',
+          credential.baseUrl ?? configJson.baseUrl ?? 'http://api.sohan.hk:50080/API',
         ),
         agentAccount: String(credential.agentAccount ?? ''),
         md5Key: String(credential.md5Key ?? ''),

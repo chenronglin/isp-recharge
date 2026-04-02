@@ -8,8 +8,6 @@ import type { IamContract } from '@/modules/iam/contracts';
 import type { IamRepository } from '@/modules/iam/iam.repository';
 import type { AdminContext, LoginResult } from '@/modules/iam/iam.types';
 
-const accessTokenExpiresInSeconds = 15 * 60;
-
 export class IamService implements IamContract {
   constructor(private readonly repository: IamRepository) {}
 
@@ -41,7 +39,7 @@ export class IamService implements IamContract {
         jti: generateBusinessNo('adm'),
       },
       env.adminJwtSecret,
-      accessTokenExpiresInSeconds,
+      env.adminAccessTokenExpiresInSeconds,
     );
     const refreshToken = generateBusinessNo('refresh');
 
@@ -51,7 +49,7 @@ export class IamService implements IamContract {
     return {
       accessToken,
       refreshToken,
-      expiresInSeconds: accessTokenExpiresInSeconds,
+      expiresInSeconds: env.adminAccessTokenExpiresInSeconds,
       user: {
         id: user.id,
         username: user.username,
@@ -87,7 +85,7 @@ export class IamService implements IamContract {
         jti: generateBusinessNo('adm'),
       },
       env.adminJwtSecret,
-      accessTokenExpiresInSeconds,
+      env.adminAccessTokenExpiresInSeconds,
     );
     const nextRefreshToken = generateBusinessNo('refresh');
 
@@ -101,7 +99,7 @@ export class IamService implements IamContract {
     return {
       accessToken,
       refreshToken: nextRefreshToken,
-      expiresInSeconds: accessTokenExpiresInSeconds,
+      expiresInSeconds: env.adminAccessTokenExpiresInSeconds,
       user: {
         id: user.id,
         username: user.username,

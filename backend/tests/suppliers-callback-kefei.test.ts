@@ -1,8 +1,8 @@
-import { createHash } from 'node:crypto';
 import { describe, expect, mock, test } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { eventBus } from '@/lib/event-bus';
-import { createSuppliersRoutes } from '@/modules/suppliers/suppliers.routes';
 import { ShenzhenKefeiAdapter } from '@/modules/suppliers/adapters/shenzhen-kefei.adapter';
+import { createSuppliersRoutes } from '@/modules/suppliers/suppliers.routes';
 import { SuppliersService } from '@/modules/suppliers/suppliers.service';
 
 function buildKefeiSign(input: {

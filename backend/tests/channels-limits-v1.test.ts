@@ -6,7 +6,11 @@ import { runSeed } from '@/database/seeds/0001_base.seed';
 import { buildOpenApiCanonicalString, signOpenApiPayload } from '@/lib/security';
 import { db, executeFile } from '@/lib/sql';
 import { stableStringify } from '@/lib/utils';
-import { acquireIntegrationTestLock, releaseIntegrationTestLock, resetTestState } from './test-support';
+import {
+  acquireIntegrationTestLock,
+  releaseIntegrationTestLock,
+  resetTestState,
+} from './test-support';
 
 let runtime: Awaited<ReturnType<typeof buildApp>>;
 const migrationFile = join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql');

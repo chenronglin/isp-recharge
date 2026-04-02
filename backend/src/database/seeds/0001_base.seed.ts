@@ -12,6 +12,8 @@ const seedIds = {
   demoLimitRule: 'seed-channel-limit-demo',
   mockSupplier: 'seed-supplier-mock',
   mockSupplierConfig: 'seed-supplier-config-mock',
+  shenzhenKefeiSupplier: 'seed-supplier-shenzhen-kefei',
+  shenzhenKefeiSupplierConfig: 'seed-supplier-config-shenzhen-kefei',
   mixedProduct: 'seed-product-cmcc-mixed-50',
   fastProduct: 'seed-product-cmcc-fast-100',
   mixedMapping: 'seed-product-mapping-mixed',
@@ -32,6 +34,14 @@ export async function runSeed(db: SQL): Promise<void> {
   const callbackSecret = encryptText('demo-callback-secret');
   const supplierCredential = encryptText('mock-supplier-token');
   const supplierCallbackSecret = encryptText('mock-supplier-callback');
+  const shenzhenKefeiCredential = encryptText(
+    JSON.stringify({
+      agentAccount: 'JG18948358181',
+      md5Key: 'F29C80BB80EA32D4',
+      baseUrl: 'http://api.sohan.hk:50080/API',
+    }),
+  );
+  const shenzhenKefeiCallbackSecret = encryptText('F29C80BB80EA32D4');
 
   await db.begin(async (tx) => {
     await tx`
@@ -224,6 +234,57 @@ export async function runSeed(db: SQL): Promise<void> {
         ${supplierCredential},
         ${supplierCallbackSecret},
         2000
+      )
+      ON CONFLICT (supplier_id) DO UPDATE
+      SET
+        config_json = EXCLUDED.config_json,
+        credential_encrypted = EXCLUDED.credential_encrypted,
+        callback_secret_encrypted = EXCLUDED.callback_secret_encrypted,
+        timeout_ms = EXCLUDED.timeout_ms,
+        updated_at = NOW()
+    `;
+
+    await tx`
+      INSERT INTO supplier.suppliers (
+        id,
+        supplier_code,
+        supplier_name,
+        protocol_type,
+        status
+      )
+      VALUES (
+        ${seedIds.shenzhenKefeiSupplier},
+        'shenzhen-kefei',
+        '深圳科飞',
+        'SOHAN_API',
+        'ACTIVE'
+      )
+      ON CONFLICT (supplier_code) DO UPDATE
+      SET
+        supplier_name = EXCLUDED.supplier_name,
+        protocol_type = EXCLUDED.protocol_type,
+        status = EXCLUDED.status,
+        updated_at = NOW()
+    `;
+
+    await tx`
+      INSERT INTO supplier.supplier_configs (
+        id,
+        supplier_id,
+        config_json,
+        credential_encrypted,
+        callback_secret_encrypted,
+        timeout_ms
+      )
+      VALUES (
+        ${seedIds.shenzhenKefeiSupplierConfig},
+        ${seedIds.shenzhenKefeiSupplier},
+        ${JSON.stringify({
+          baseUrl: 'http://api.sohan.hk:50080/API',
+        })},
+        ${shenzhenKefeiCredential},
+        ${shenzhenKefeiCallbackSecret},
+        3000
       )
       ON CONFLICT (supplier_id) DO UPDATE
       SET

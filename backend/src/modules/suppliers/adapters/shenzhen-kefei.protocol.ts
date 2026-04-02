@@ -12,10 +12,7 @@ export function buildKefeiPayload(input: {
   fieldOrder: string[];
 }) {
   const orderedEntries = input.fieldOrder.map((key) => {
-    if (
-      !Object.prototype.hasOwnProperty.call(input.busiBody, key) ||
-      input.busiBody[key] === undefined
-    ) {
+    if (!Object.hasOwn(input.busiBody, key) || input.busiBody[key] === undefined) {
       throw new Error(`missing required busiBody field '${key}'`);
     }
 
@@ -46,9 +43,7 @@ export function decodeKefeiResponse(input: ArrayBuffer | Buffer): string {
   return iconv.decode(buffer, 'gbk');
 }
 
-export function mapKefeiOrderStatus(
-  code: string,
-): {
+export function mapKefeiOrderStatus(code: string): {
   status: 'QUERYING' | 'SUCCESS' | 'FAIL';
 } {
   if (['11', '16'].includes(code)) {

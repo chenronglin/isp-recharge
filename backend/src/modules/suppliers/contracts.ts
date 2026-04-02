@@ -1,10 +1,10 @@
+import type { SupplierBalanceResult } from '@/modules/suppliers/adapters/types';
 import type {
   SupplierCatalogItem,
   SupplierDynamicItem,
   SupplierReconcileDiff,
   SupplierSyncLog,
 } from '@/modules/suppliers/suppliers.types';
-import type { SupplierBalanceResult } from '@/modules/suppliers/adapters/types';
 
 export interface SupplierContract {
   getSupplierBalance(input: { supplierId: string }): Promise<SupplierBalanceResult>;

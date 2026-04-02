@@ -122,7 +122,10 @@ export function createSuppliersRoutes({ suppliersService, iamService }: Supplier
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         await iamService.requireActiveAdmin(payload.sub);
-        return ok(requestId, await suppliersService.listSyncLogs({ supplierId: params.supplierId }));
+        return ok(
+          requestId,
+          await suppliersService.listSyncLogs({ supplierId: params.supplierId }),
+        );
       },
       {
         detail: {

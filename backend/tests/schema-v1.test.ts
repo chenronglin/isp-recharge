@@ -181,6 +181,7 @@ test('基础种子只应注入 ISP 充值 V1 必需演示数据', async () => {
   ]);
   expect(supplierRows).toEqual([
     { supplier_code: 'mock-supplier', supplier_name: '模拟供应商', status: 'ACTIVE' },
+    { supplier_code: 'shenzhen-kefei', supplier_name: '深圳科飞', status: 'ACTIVE' },
   ]);
   expect(productRows).toEqual([
     {

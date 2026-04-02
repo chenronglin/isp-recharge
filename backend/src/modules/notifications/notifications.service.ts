@@ -2,14 +2,14 @@ import { badRequest } from '@/lib/errors';
 import { eventBus } from '@/lib/event-bus';
 import { decryptText, signOpenApiPayload } from '@/lib/security';
 import type { NotificationsRepository } from '@/modules/notifications/notifications.repository';
-import {
-  notificationWorkerMaxAttempts,
-  retryBackoffInMinutes,
-} from '@/modules/notifications/retry-policy';
 import type {
   NotificationTaskType,
   NotificationTriggerReason,
 } from '@/modules/notifications/notifications.types';
+import {
+  notificationWorkerMaxAttempts,
+  retryBackoffInMinutes,
+} from '@/modules/notifications/retry-policy';
 import type { OrderContract } from '@/modules/orders/contracts';
 import type { WorkerContract } from '@/modules/worker/contracts';
 

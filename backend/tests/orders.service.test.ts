@@ -763,9 +763,11 @@ describe('OrdersService.manual-close-and-late-success', () => {
       async updateStatuses(_orderNo: string, update: Record<string, unknown>) {
         currentOrder = {
           ...currentOrder,
-          mainStatus: (update.mainStatus as typeof currentOrder.mainStatus) ?? currentOrder.mainStatus,
+          mainStatus:
+            (update.mainStatus as typeof currentOrder.mainStatus) ?? currentOrder.mainStatus,
           supplierStatus:
-            (update.supplierStatus as typeof currentOrder.supplierStatus) ?? currentOrder.supplierStatus,
+            (update.supplierStatus as typeof currentOrder.supplierStatus) ??
+            currentOrder.supplierStatus,
           refundStatus:
             (update.refundStatus as typeof currentOrder.refundStatus) ?? currentOrder.refundStatus,
           finishedAt: update.finishedAt ? new Date().toISOString() : currentOrder.finishedAt,
@@ -830,7 +832,8 @@ describe('OrdersService.manual-close-and-late-success', () => {
         currentOrder = {
           ...currentOrder,
           monitorStatus:
-            (update.monitorStatus as typeof currentOrder.monitorStatus) ?? currentOrder.monitorStatus,
+            (update.monitorStatus as typeof currentOrder.monitorStatus) ??
+            currentOrder.monitorStatus,
           exceptionTag:
             (update.exceptionTag as typeof currentOrder.exceptionTag) ?? currentOrder.exceptionTag,
         };
