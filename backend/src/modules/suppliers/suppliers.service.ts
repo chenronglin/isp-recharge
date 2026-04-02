@@ -117,7 +117,11 @@ export class SuppliersService implements SupplierContract {
       const syncedProducts: string[] = [];
 
       for (const item of input.items) {
-        const product = await this.repository.upsertRechargeProduct(item);
+        const product = await this.repository.findRechargeProductByBusinessKey(item);
+
+        if (!product) {
+          continue;
+        }
 
         await this.repository.upsertProductSupplierMapping({
           productId: product.id,

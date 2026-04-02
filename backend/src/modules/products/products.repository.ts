@@ -1,10 +1,12 @@
 import { conflict } from '@/lib/errors';
+import { generateId } from '@/lib/id';
 import { db, first } from '@/lib/sql';
 import { productsSql } from '@/modules/products/products.sql';
 import type {
   ProductSupplierMapping,
   RechargeProduct,
   RechargeProductType,
+  SaveRechargeProductInput,
 } from '@/modules/products/products.types';
 
 export class ProductsRepository {
@@ -23,8 +25,13 @@ export class ProductsRepository {
     };
   }
 
-  async listProducts(): Promise<RechargeProduct[]> {
-    const rows = await db.unsafe<RechargeProduct[]>(productsSql.listProducts);
+  async listAdminProducts(): Promise<RechargeProduct[]> {
+    const rows = await db.unsafe<RechargeProduct[]>(productsSql.listAdminProducts);
+    return rows.map((row) => this.mapProduct(row));
+  }
+
+  async listActiveProducts(): Promise<RechargeProduct[]> {
+    const rows = await db.unsafe<RechargeProduct[]>(productsSql.listActiveProducts);
     return rows.map((row) => this.mapProduct(row));
   }
 
@@ -129,6 +136,133 @@ export class ProductsRepository {
     `);
 
     return row ? this.mapProduct(row) : null;
+  }
+
+  async findProductByCode(productCode: string): Promise<RechargeProduct | null> {
+    const row = await first<RechargeProduct>(db<RechargeProduct[]>`
+      SELECT
+        id,
+        product_code AS "productCode",
+        product_name AS "productName",
+        carrier_code AS "carrierCode",
+        province_name AS "provinceName",
+        face_value AS "faceValue",
+        recharge_mode AS "productType",
+        sales_unit AS "salesUnit",
+        status
+      FROM product.recharge_products
+      WHERE product_code = ${productCode}
+      LIMIT 1
+    `);
+
+    return row ? this.mapProduct(row) : null;
+  }
+
+  async findProductByBusinessKey(input: {
+    carrierCode: string;
+    provinceName: string;
+    faceValue: number;
+    productType: RechargeProductType;
+  }): Promise<RechargeProduct | null> {
+    const row = await first<RechargeProduct>(db<RechargeProduct[]>`
+      SELECT
+        id,
+        product_code AS "productCode",
+        product_name AS "productName",
+        carrier_code AS "carrierCode",
+        province_name AS "provinceName",
+        face_value AS "faceValue",
+        recharge_mode AS "productType",
+        sales_unit AS "salesUnit",
+        status
+      FROM product.recharge_products
+      WHERE carrier_code = ${input.carrierCode}
+        AND province_name = ${input.provinceName}
+        AND face_value = ${input.faceValue}
+        AND recharge_mode = ${input.productType}
+      LIMIT 1
+    `);
+
+    return row ? this.mapProduct(row) : null;
+  }
+
+  async createRechargeProduct(input: SaveRechargeProductInput): Promise<RechargeProduct> {
+    const row = await first<RechargeProduct>(db<RechargeProduct[]>`
+      INSERT INTO product.recharge_products (
+        id,
+        product_code,
+        product_name,
+        carrier_code,
+        province_name,
+        face_value,
+        recharge_mode,
+        sales_unit,
+        status
+      )
+      VALUES (
+        ${generateId()},
+        ${input.productCode},
+        ${input.productName},
+        ${input.carrierCode},
+        ${input.provinceName},
+        ${input.faceValue},
+        ${input.productType},
+        ${input.salesUnit},
+        ${input.status}
+      )
+      RETURNING
+        id,
+        product_code AS "productCode",
+        product_name AS "productName",
+        carrier_code AS "carrierCode",
+        province_name AS "provinceName",
+        face_value AS "faceValue",
+        recharge_mode AS "productType",
+        sales_unit AS "salesUnit",
+        status
+    `);
+
+    if (!row) {
+      throw conflict('平台商品创建失败');
+    }
+
+    return this.mapProduct(row);
+  }
+
+  async updateRechargeProduct(
+    productId: string,
+    input: SaveRechargeProductInput,
+  ): Promise<RechargeProduct> {
+    const row = await first<RechargeProduct>(db<RechargeProduct[]>`
+      UPDATE product.recharge_products
+      SET
+        product_code = ${input.productCode},
+        product_name = ${input.productName},
+        carrier_code = ${input.carrierCode},
+        province_name = ${input.provinceName},
+        face_value = ${input.faceValue},
+        recharge_mode = ${input.productType},
+        sales_unit = ${input.salesUnit},
+        status = ${input.status},
+        updated_at = NOW()
+      WHERE id = ${productId}
+      RETURNING
+        id,
+        product_code AS "productCode",
+        product_name AS "productName",
+        carrier_code AS "carrierCode",
+        province_name AS "provinceName",
+        face_value AS "faceValue",
+        recharge_mode AS "productType",
+        sales_unit AS "salesUnit",
+        status
+    `);
+
+    if (!row) {
+      throw conflict('平台商品更新失败');
+    }
+
+    return this.mapProduct(row);
   }
 
   async listMappingsByProductId(productId: string): Promise<ProductSupplierMapping[]> {

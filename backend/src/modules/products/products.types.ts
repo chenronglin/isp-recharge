@@ -1,15 +1,28 @@
 export type RechargeProductType = 'FAST' | 'MIXED';
+export type RechargeCarrierCode = 'CMCC' | 'CTCC' | 'CUCC' | 'CBN';
+export type RechargeProductStatus = 'ACTIVE' | 'INACTIVE';
 
 export interface RechargeProduct {
   id: string;
   productCode: string;
   productName: string;
-  carrierCode: string;
+  carrierCode: RechargeCarrierCode;
   provinceName: string;
   faceValue: number;
   productType: RechargeProductType;
   salesUnit: string;
-  status: string;
+  status: RechargeProductStatus;
+}
+
+export interface SaveRechargeProductInput {
+  productCode: string;
+  productName: string;
+  carrierCode: RechargeCarrierCode;
+  provinceName: string;
+  faceValue: number;
+  productType: RechargeProductType;
+  salesUnit: string;
+  status: RechargeProductStatus;
 }
 
 export interface ProductSupplierMapping {

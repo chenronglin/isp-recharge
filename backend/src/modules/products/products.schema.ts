@@ -1,35 +1,27 @@
 import { t } from 'elysia';
 
-export const CreateCategoryBodySchema = t.Object({
-  categoryName: t.String({ minLength: 1 }),
-  parentId: t.Optional(t.String()),
-  sortNo: t.Optional(t.Number()),
+export const RechargeCarrierCodeSchema = t.Union([
+  t.Literal('CMCC'),
+  t.Literal('CTCC'),
+  t.Literal('CUCC'),
+  t.Literal('CBN'),
+]);
+
+export const RechargeProductTypeSchema = t.Union([t.Literal('FAST'), t.Literal('MIXED')]);
+
+export const RechargeProductStatusSchema = t.Union([t.Literal('ACTIVE'), t.Literal('INACTIVE')]);
+
+export const SaveRechargeProductBodySchema = t.Object({
+  productCode: t.String({ minLength: 1, maxLength: 128 }),
+  productName: t.String({ minLength: 1, maxLength: 128 }),
+  carrierCode: RechargeCarrierCodeSchema,
+  provinceName: t.String({ minLength: 1, maxLength: 32 }),
+  faceValue: t.Number({ minimum: 0.01 }),
+  productType: RechargeProductTypeSchema,
+  salesUnit: t.String({ minLength: 1, maxLength: 16 }),
+  status: RechargeProductStatusSchema,
 });
 
-export const CreateProductBodySchema = t.Object({
-  categoryId: t.String(),
-  productName: t.String({ minLength: 1 }),
-  productType: t.String({ minLength: 1 }),
-  deliveryType: t.String({ minLength: 1 }),
-  targetType: t.String({ minLength: 1 }),
-});
-
-export const CreateSkuBodySchema = t.Object({
-  productId: t.String(),
-  skuName: t.String({ minLength: 1 }),
-  faceValue: t.Number({ minimum: 0 }),
-  operator: t.Optional(t.String()),
-  region: t.Optional(t.String()),
-  baseCostPrice: t.Number({ minimum: 0 }),
-  baseSalePrice: t.Number({ minimum: 0 }),
-});
-
-export const CreateMappingBodySchema = t.Object({
-  skuId: t.String(),
-  supplierId: t.String(),
-  supplierSkuCode: t.String({ minLength: 1 }),
-  priority: t.Optional(t.Number({ minimum: 1 })),
-  weight: t.Optional(t.Number({ minimum: 1 })),
-  routeType: t.Optional(t.String()),
-  costPrice: t.Number({ minimum: 0 }),
+export const ProductIdParamsSchema = t.Object({
+  productId: t.String({ minLength: 1 }),
 });
