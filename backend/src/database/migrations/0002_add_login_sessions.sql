@@ -1,0 +1,9 @@
+CREATE TABLE IF NOT EXISTS iam.login_sessions (
+  id TEXT PRIMARY KEY,
+  user_id TEXT NOT NULL,
+  refresh_token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
