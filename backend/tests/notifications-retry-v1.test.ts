@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 import { buildApp } from '@/app';
-import { runSeed } from '@/database/seeds/0001_base.seed';
+import { buildSeedRechargeProductId, runSeed } from '@/database/seeds/0001_base.seed';
 import { db, executeFile } from '@/lib/sql';
 import {
   acquireIntegrationTestLock,
@@ -114,6 +114,13 @@ async function forceNotificationDeliverJobReady(taskNo: string) {
 }
 
 async function createNotificationOrder(orderNo: string) {
+  const guangdongMixed50ProductId = buildSeedRechargeProductId({
+    carrierCode: 'CMCC',
+    provinceName: '广东',
+    productType: 'MIXED',
+    faceValue: 50,
+  });
+
   await db`
     INSERT INTO ordering.orders (
       id,
@@ -141,7 +148,7 @@ async function createNotificationOrder(orderNo: string) {
       ${orderNo},
       ${`channel-${orderNo}`},
       'seed-channel-demo',
-      'seed-product-cmcc-mixed-50',
+      ${guangdongMixed50ProductId},
       '13800130000',
       '广东',
       'CMCC',

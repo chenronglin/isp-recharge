@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 import { buildApp } from '@/app';
-import { runSeed } from '@/database/seeds/0001_base.seed';
+import { buildSeedRechargeProductId, runSeed } from '@/database/seeds/0001_base.seed';
 import { buildOpenApiCanonicalString, signOpenApiPayload } from '@/lib/security';
 import { db, executeFile } from '@/lib/sql';
 import { stableStringify } from '@/lib/utils';
@@ -225,12 +225,18 @@ test('超过 QPS 限额的连续请求会被拒绝', async () => {
 
 test('渠道销售价低于采购价时会拒绝下单', async () => {
   const channelId = await getDemoChannelId();
+  const guangdongMixed50ProductId = buildSeedRechargeProductId({
+    carrierCode: 'CMCC',
+    provinceName: '广东',
+    productType: 'MIXED',
+    faceValue: 50,
+  });
 
   expect(channelId).toBeTruthy();
 
   await runtime.services.channels.upsertPricePolicy({
     channelId: String(channelId),
-    productId: 'seed-product-cmcc-mixed-50',
+    productId: guangdongMixed50ProductId,
     salePrice: 40,
   });
 

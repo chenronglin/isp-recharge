@@ -3,7 +3,12 @@ import { join } from 'node:path';
 import iconv from 'iconv-lite';
 
 import { buildApp } from '@/app';
-import { runSeed } from '@/database/seeds/0001_base.seed';
+import {
+  buildSeedMockSupplierProductCode,
+  buildSeedRechargeProductCode,
+  buildSeedRechargeProductId,
+  runSeed,
+} from '@/database/seeds/0001_base.seed';
 import { buildOpenApiCanonicalString, encryptText, signOpenApiPayload } from '@/lib/security';
 import { db, executeFile } from '@/lib/sql';
 import { stableStringify } from '@/lib/utils';
@@ -278,6 +283,26 @@ async function setMockSupplierMode(mode: 'mock-auto-success' | 'mock-auto-fail')
 
 const ITEST_SHENZHEN_KEFEI_SUPPLIER_ID = 'itest-supplier-shenzhen-kefei';
 const ITEST_SHENZHEN_KEFEI_SUPPLIER_CODE = 'itest-shenzhen-kefei';
+const seedGuangdongMixed50 = {
+  productId: buildSeedRechargeProductId({
+    carrierCode: 'CMCC',
+    provinceName: '广东',
+    productType: 'MIXED',
+    faceValue: 50,
+  }),
+  productCode: buildSeedRechargeProductCode({
+    carrierCode: 'CMCC',
+    provinceName: '广东',
+    productType: 'MIXED',
+    faceValue: 50,
+  }),
+  mockSupplierProductCode: buildSeedMockSupplierProductCode({
+    carrierCode: 'CMCC',
+    provinceName: '广东',
+    productType: 'MIXED',
+    faceValue: 50,
+  }),
+};
 
 async function seedShenzhenKefeiSupplier() {
   await db`
@@ -544,10 +569,10 @@ describe.serial('V1 ISP 充值下单链路', () => {
       expect(response.status).toBe(200);
       expect(json.code).toBe(0);
       expect(syncResult).toEqual({
-        syncedProducts: ['cmcc-mixed-50'],
+        syncedProducts: [seedGuangdongMixed50.productCode],
       });
       expect(kefeiRows[0]?.priority).toBe(0);
-      expect(json.data.matchedProductId).toBe('seed-product-cmcc-mixed-50');
+      expect(json.data.matchedProductId).toBe(seedGuangdongMixed50.productId);
       expect(supplierCandidates[0]).toMatchObject({
         supplierId: ITEST_SHENZHEN_KEFEI_SUPPLIER_ID,
         supplierProductCode: 'kefei-cmcc-mixed-50',
@@ -557,7 +582,7 @@ describe.serial('V1 ISP 充值下单链路', () => {
         supplierCandidates.some(
           (candidate) =>
             candidate.supplierId === 'seed-supplier-mock' &&
-            candidate.supplierProductCode === 'mock-cmcc-mixed-50',
+            candidate.supplierProductCode === seedGuangdongMixed50.mockSupplierProductCode,
         ),
       ).toBe(true);
     } finally {

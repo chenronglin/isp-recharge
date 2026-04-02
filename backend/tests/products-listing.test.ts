@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 
 import { buildApp } from '@/app';
-import { runSeed } from '@/database/seeds/0001_base.seed';
+import {
+  buildSeedRechargeProductCode,
+  FIXED_RECHARGE_PRODUCT_COUNT,
+  runSeed,
+} from '@/database/seeds/0001_base.seed';
 import { buildOpenApiCanonicalString, signOpenApiPayload } from '@/lib/security';
 import { db } from '@/lib/sql';
 import { acquireIntegrationTestLock, releaseIntegrationTestLock } from './test-support';
@@ -78,9 +82,28 @@ describe('充值商品列表', () => {
 
     expect(response.status).toBe(200);
     expect(json.code).toBe(0);
-    expect(json.data.length).toBeGreaterThan(0);
+    expect(json.data.length).toBe(FIXED_RECHARGE_PRODUCT_COUNT);
     expect(json.data.map((item) => item.productCode)).toEqual(
-      expect.arrayContaining(['cmcc-mixed-50', 'cmcc-fast-100']),
+      expect.arrayContaining([
+        buildSeedRechargeProductCode({
+          carrierCode: 'CMCC',
+          provinceName: '广东',
+          productType: 'MIXED',
+          faceValue: 50,
+        }),
+        buildSeedRechargeProductCode({
+          carrierCode: 'CMCC',
+          provinceName: '广东',
+          productType: 'FAST',
+          faceValue: 100,
+        }),
+        buildSeedRechargeProductCode({
+          carrierCode: 'CBN',
+          provinceName: '北京',
+          productType: 'MIXED',
+          faceValue: 10,
+        }),
+      ]),
     );
   });
 });

@@ -1,7 +1,11 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
-import { runSeed } from '@/database/seeds/0001_base.seed';
+import {
+  buildSeedRechargeProductCode,
+  FIXED_RECHARGE_PRODUCT_COUNT,
+  runSeed,
+} from '@/database/seeds/0001_base.seed';
 import { db, executeFile } from '@/lib/sql';
 import { acquireIntegrationTestLock, releaseIntegrationTestLock } from './test-support';
 
@@ -139,11 +143,35 @@ test('基础种子只应注入 ISP 充值 V1 必需演示数据', async () => {
     FROM supplier.suppliers
     ORDER BY supplier_code ASC
   `);
-  const productRows = await db.unsafe<
+  const productCountRows = await db.unsafe<{ total: number }[]>(`
+    SELECT COUNT(*)::int AS total
+    FROM product.recharge_products
+  `);
+  const sampleProductRows = await db.unsafe<
     { product_code: string; product_name: string; recharge_mode: string; carrier_code: string }[]
   >(`
     SELECT product_code, product_name, recharge_mode, carrier_code
     FROM product.recharge_products
+    WHERE product_code IN (
+      '${buildSeedRechargeProductCode({
+        carrierCode: 'CMCC',
+        provinceName: '广东',
+        productType: 'MIXED',
+        faceValue: 50,
+      })}',
+      '${buildSeedRechargeProductCode({
+        carrierCode: 'CTCC',
+        provinceName: '北京',
+        productType: 'FAST',
+        faceValue: 10,
+      })}',
+      '${buildSeedRechargeProductCode({
+        carrierCode: 'CBN',
+        provinceName: '新疆',
+        productType: 'MIXED',
+        faceValue: 200,
+      })}'
+    )
     ORDER BY product_code ASC
   `);
   const segmentRows = await db.unsafe<
@@ -183,25 +211,32 @@ test('基础种子只应注入 ISP 充值 V1 必需演示数据', async () => {
     { supplier_code: 'mock-supplier', supplier_name: '模拟供应商', status: 'ACTIVE' },
     { supplier_code: 'shenzhen-kefei', supplier_name: '深圳科飞', status: 'ACTIVE' },
   ]);
-  expect(productRows).toEqual([
+  expect(productCountRows[0]?.total).toBe(FIXED_RECHARGE_PRODUCT_COUNT);
+  expect(sampleProductRows).toEqual([
     {
-      product_code: 'cmcc-fast-100',
-      product_name: '广东移动快充 100 元',
-      recharge_mode: 'FAST',
+      product_code: 'cbn-xinjiang-mixed-200',
+      product_name: '新疆广电话费 200 元混充',
+      recharge_mode: 'MIXED',
+      carrier_code: 'CBN',
+    },
+    {
+      product_code: 'cmcc-guangdong-mixed-50',
+      product_name: '广东移动话费 50 元混充',
+      recharge_mode: 'MIXED',
       carrier_code: 'CMCC',
     },
     {
-      product_code: 'cmcc-mixed-50',
-      product_name: '广东移动慢充 50 元',
-      recharge_mode: 'MIXED',
-      carrier_code: 'CMCC',
+      product_code: 'ctcc-beijing-fast-10',
+      product_name: '北京电信话费 10 元快充',
+      recharge_mode: 'FAST',
+      carrier_code: 'CTCC',
     },
   ]);
   expect(segmentRows).toEqual([
     { mobile_prefix: '1380013', province_name: '广东', isp_code: 'CMCC' },
   ]);
-  expect(authCountRows[0]?.total).toBe(2);
-  expect(priceCountRows[0]?.total).toBe(2);
+  expect(authCountRows[0]?.total).toBe(FIXED_RECHARGE_PRODUCT_COUNT);
+  expect(priceCountRows[0]?.total).toBe(FIXED_RECHARGE_PRODUCT_COUNT);
   expect(callbackCountRows[0]?.total).toBe(1);
   expect(accountRows).toEqual([
     { owner_type: 'CHANNEL', available_balance: '10000.00', frozen_balance: '0.00' },

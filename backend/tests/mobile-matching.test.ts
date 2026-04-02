@@ -2,13 +2,39 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 
 import { buildApp } from '@/app';
-import { runSeed } from '@/database/seeds/0001_base.seed';
+import {
+  buildSeedRechargeProductCode,
+  buildSeedRechargeProductId,
+  runSeed,
+} from '@/database/seeds/0001_base.seed';
 import { db, executeFile } from '@/lib/sql';
 import { acquireIntegrationTestLock, releaseIntegrationTestLock } from './test-support';
 
 let runtime: Awaited<ReturnType<typeof buildApp>>;
 
 const migrationFile = join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql');
+const seedGuangdongMixed30 = {
+  productId: buildSeedRechargeProductId({
+    carrierCode: 'CMCC',
+    provinceName: '广东',
+    productType: 'MIXED',
+    faceValue: 30,
+  }),
+};
+const seedGuangdongFast100 = {
+  productId: buildSeedRechargeProductId({
+    carrierCode: 'CMCC',
+    provinceName: '广东',
+    productType: 'FAST',
+    faceValue: 100,
+  }),
+  productCode: buildSeedRechargeProductCode({
+    carrierCode: 'CMCC',
+    provinceName: '广东',
+    productType: 'FAST',
+    faceValue: 100,
+  }),
+};
 
 async function rebuildManagedSchemas() {
   await db.unsafe(`
@@ -26,54 +52,6 @@ async function rebuildManagedSchemas() {
 
   await executeFile(migrationFile);
   await runSeed(db);
-  await db`
-    INSERT INTO product.recharge_products (
-      id,
-      product_code,
-      product_name,
-      carrier_code,
-      province_name,
-      face_value,
-      recharge_mode,
-      sales_unit,
-      status
-    )
-    VALUES (
-      'itest-product-cmcc-mixed-100',
-      'itest-cmcc-mixed-100',
-      '广东移动慢充 100 元',
-      'CMCC',
-      '广东',
-      100,
-      'MIXED',
-      'CNY',
-      'ACTIVE'
-    )
-    ON CONFLICT (product_code) DO NOTHING
-  `;
-  await db`
-    INSERT INTO product.product_supplier_mappings (
-      id,
-      product_id,
-      supplier_id,
-      supplier_product_code,
-      route_type,
-      priority,
-      cost_price,
-      status
-    )
-    VALUES (
-      'itest-product-mapping-cmcc-mixed-100',
-      'itest-product-cmcc-mixed-100',
-      'seed-supplier-mock',
-      'itest-cmcc-mixed-100',
-      'PRIMARY',
-      1,
-      98,
-      'ACTIVE'
-    )
-    ON CONFLICT (product_id, supplier_id) DO NOTHING
-  `;
 }
 
 beforeAll(async () => {
@@ -110,6 +88,14 @@ describe('ISP 充值商品匹配', () => {
   });
 
   test('未命中省份商品时回退到全国商品', async () => {
+    await db`
+      UPDATE product.product_supplier_mappings
+      SET
+        status = 'INACTIVE'
+      WHERE product_id = ${seedGuangdongMixed30.productId}
+        AND supplier_id = 'seed-supplier-mock'
+    `;
+
     await db`
       INSERT INTO product.recharge_products (
         id,
@@ -279,7 +265,7 @@ describe('ISP 充值商品匹配', () => {
       )
       VALUES (
         'itest-mapping-fast-100-alt',
-        'seed-product-cmcc-fast-100',
+        ${seedGuangdongFast100.productId},
         'itest-supplier-alt',
         'alt-fast-100',
         'PRIMARY',
@@ -297,7 +283,7 @@ describe('ISP 充值商品匹配', () => {
       supplierCode: 'mock-supplier',
       items: [
         {
-          productCode: 'cmcc-fast-100',
+          productCode: seedGuangdongFast100.productCode,
           salesStatus: 'MAINTENANCE',
           purchasePrice: 96,
           inventoryQuantity: 0,
@@ -311,7 +297,7 @@ describe('ISP 充值商品匹配', () => {
       productType: 'FAST',
     });
 
-    expect(matched.product.productCode).toBe('cmcc-fast-100');
+    expect(matched.product.productCode).toBe(seedGuangdongFast100.productCode);
     expect(matched.supplierCandidates).toHaveLength(1);
     expect(matched.supplierCandidates[0]).toMatchObject({
       supplierId: 'itest-supplier-alt',
@@ -324,7 +310,7 @@ describe('ISP 充值商品匹配', () => {
       UPDATE product.product_supplier_mappings
       SET
         status = 'INACTIVE'
-      WHERE product_id = 'seed-product-cmcc-fast-100'
+      WHERE product_id = ${seedGuangdongFast100.productId}
         AND supplier_id = 'itest-supplier-alt'
     `;
 
@@ -334,7 +320,7 @@ describe('ISP 充值商品匹配', () => {
         sales_status = 'ON_SALE',
         inventory_quantity = 100,
         dynamic_updated_at = NOW() - INTERVAL '90 minutes'
-      WHERE product_id = 'seed-product-cmcc-fast-100'
+      WHERE product_id = ${seedGuangdongFast100.productId}
         AND supplier_id = 'seed-supplier-mock'
     `;
 
@@ -350,7 +336,7 @@ describe('ISP 充值商品匹配', () => {
       UPDATE product.product_supplier_mappings
       SET
         dynamic_updated_at = NOW() - INTERVAL '121 minutes'
-      WHERE product_id = 'seed-product-cmcc-fast-100'
+      WHERE product_id = ${seedGuangdongFast100.productId}
         AND supplier_id = 'seed-supplier-mock'
     `;
 
