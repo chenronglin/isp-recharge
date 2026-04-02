@@ -1,16 +1,24 @@
 import { Elysia } from 'elysia';
+import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { ok } from '@/lib/http';
-import { getRequestIdFromRequest } from '@/lib/route-meta';
+import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
+import type { ChannelsService } from '@/modules/channels/channels.service';
 import type { IamService } from '@/modules/iam/iam.service';
+import { RechargeChannelAccountBodySchema } from '@/modules/ledger/ledger.schema';
 import type { LedgerService } from '@/modules/ledger/ledger.service';
 
 interface LedgerRoutesDeps {
   ledgerService: LedgerService;
   iamService: IamService;
+  channelsService: ChannelsService;
 }
 
-export function createLedgerRoutes({ ledgerService, iamService }: LedgerRoutesDeps) {
+export function createLedgerRoutes({
+  ledgerService,
+  iamService,
+  channelsService,
+}: LedgerRoutesDeps) {
   const adminRoutes = new Elysia()
     .get(
       '/admin/accounts',
@@ -41,6 +49,51 @@ export function createLedgerRoutes({ ledgerService, iamService }: LedgerRoutesDe
           tags: ['admin'],
           summary: '查询账务流水',
           description: '后台查询订单资金变动流水，用于对账、排查与财务核对。',
+        },
+      },
+    )
+    .post(
+      '/admin/channels/:channelId/recharge',
+      async ({ body, params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        await channelsService.getChannelById(params.channelId);
+        const result = await ledgerService.rechargeChannelBalance({
+          channelId: params.channelId,
+          amount: body.amount,
+          referenceNo: requestId,
+        });
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'RECHARGE_CHANNEL_BALANCE',
+          resourceType: 'CHANNEL_ACCOUNT',
+          resourceId: params.channelId,
+          details: {
+            amount: body.amount,
+            remark: body.remark ?? null,
+            referenceNo: result.referenceNo,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
+        return ok(requestId, {
+          success: true,
+          channelId: params.channelId,
+          amount: body.amount,
+          referenceNo: result.referenceNo,
+        });
+      },
+      {
+        body: RechargeChannelAccountBodySchema,
+        detail: {
+          tags: ['admin'],
+          summary: '为渠道账户充值',
+          description: '后台为指定渠道补充预付余额，首次充值会自动初始化渠道账务账户。',
         },
       },
     );

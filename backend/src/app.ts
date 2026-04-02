@@ -68,7 +68,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     channelsService: channelsModule.service,
     iamService: iamModule.service,
   });
-  const ledgerModule = createLedgerModule(iamModule.service);
+  const ledgerModule = createLedgerModule(iamModule.service, channelsModule.service);
   ledgerServiceRef = ledgerModule.service;
 
   const suppliersModule = createSuppliersModule({

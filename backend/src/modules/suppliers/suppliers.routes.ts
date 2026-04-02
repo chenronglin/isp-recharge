@@ -5,7 +5,6 @@ import { ok } from '@/lib/http';
 import { getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
 import {
-  CreateSupplierBodySchema,
   CreateSupplierConfigBodySchema,
   SupplierQueryBodySchema,
   SupplierSubmitBodySchema,
@@ -58,23 +57,6 @@ export function createSuppliersRoutes({ suppliersService, iamService }: Supplier
           tags: ['admin'],
           summary: '查询供应商列表',
           description: '后台查询供应商基础资料、协议类型与启用状态信息。',
-        },
-      },
-    )
-    .post(
-      '/admin/suppliers',
-      async ({ body, request }) => {
-        const requestId = getRequestIdFromRequest(request);
-        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
-        return ok(requestId, await suppliersService.createSupplier(body));
-      },
-      {
-        body: CreateSupplierBodySchema,
-        detail: {
-          tags: ['admin'],
-          summary: '创建供应商',
-          description: '后台新增供应商主体资料，为商品映射与履约链路配置供应商。',
         },
       },
     )

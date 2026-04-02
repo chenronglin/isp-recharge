@@ -1094,7 +1094,7 @@ Expected: PASS。当前 `chooseSupplierCandidate` 已按 `priority ASC, costPric
 
 - 系统已部署到白名单服务器
 - 公网回调域名已配置为 `https://admin.miigo.cn/callbacks/suppliers/shenzhen-kefei`
-- 已通过后台接口创建供应商：
+- 已通过 seed 或迁移初始化供应商主数据：
   - `supplierCode = shenzhen-kefei`
   - `supplierName = 深圳科飞`
   - `protocolType = SOHAN_API`

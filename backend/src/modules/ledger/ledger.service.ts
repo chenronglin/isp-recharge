@@ -13,6 +13,28 @@ export class LedgerService implements LedgerContract {
     return this.repository.listLedgerEntries();
   }
 
+  async rechargeChannelBalance(input: {
+    channelId: string;
+    amount: number;
+    referenceNo: string;
+  }): Promise<{ referenceNo: string }> {
+    if (!Number.isFinite(input.amount) || input.amount <= 0) {
+      throw badRequest('充值金额必须大于 0');
+    }
+
+    const channelAccount = await this.repository.ensureChannelAccount(input.channelId);
+
+    return this.repository.createSingleLedger({
+      accountId: channelAccount.id,
+      orderNo: null,
+      actionType: 'CHANNEL_RECHARGE',
+      direction: 'CREDIT',
+      amount: Number(input.amount),
+      referenceType: 'CHANNEL_RECHARGE',
+      referenceNo: input.referenceNo,
+    });
+  }
+
   async ensureBalanceSufficient(input: { channelId: string; amount: number }): Promise<void> {
     const channelAccount = await this.repository.findAccount('CHANNEL', input.channelId);
 

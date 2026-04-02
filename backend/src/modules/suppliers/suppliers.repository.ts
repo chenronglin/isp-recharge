@@ -74,47 +74,6 @@ export class SuppliersRepository {
     return db.unsafe<Supplier[]>(suppliersSql.listSuppliers);
   }
 
-  async createSupplier(input: {
-    supplierCode: string;
-    supplierName: string;
-    protocolType: string;
-  }): Promise<Supplier> {
-    const rows = await db<Supplier[]>`
-      INSERT INTO supplier.suppliers (
-        id,
-        supplier_code,
-        supplier_name,
-        protocol_type,
-        status,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        ${generateId()},
-        ${input.supplierCode},
-        ${input.supplierName},
-        ${input.protocolType},
-        'ACTIVE',
-        NOW(),
-        NOW()
-      )
-      RETURNING
-        id,
-        supplier_code AS "supplierCode",
-        supplier_name AS "supplierName",
-        protocol_type AS "protocolType",
-        status
-    `;
-
-    const supplier = rows[0];
-
-    if (!supplier) {
-      throw new Error('创建供应商失败');
-    }
-
-    return supplier;
-  }
-
   async upsertConfig(input: {
     supplierId: string;
     configJson: Record<string, unknown>;

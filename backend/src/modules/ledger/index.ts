@@ -1,3 +1,4 @@
+import type { ChannelsService } from '@/modules/channels/channels.service';
 import type { IamService } from '@/modules/iam/iam.service';
 import type { LedgerContract } from '@/modules/ledger/contracts';
 import { LedgerRepository } from '@/modules/ledger/ledger.repository';
@@ -10,7 +11,10 @@ export interface LedgerModule {
   routes: ReturnType<typeof createLedgerRoutes>;
 }
 
-export function createLedgerModule(iamService: IamService): LedgerModule {
+export function createLedgerModule(
+  iamService: IamService,
+  channelsService: ChannelsService,
+): LedgerModule {
   const repository = new LedgerRepository();
   const service = new LedgerService(repository);
 
@@ -20,6 +24,7 @@ export function createLedgerModule(iamService: IamService): LedgerModule {
     routes: createLedgerRoutes({
       ledgerService: service,
       iamService,
+      channelsService,
     }),
   };
 }

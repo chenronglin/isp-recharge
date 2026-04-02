@@ -234,7 +234,6 @@
 ### 10.1 后台 API
 
 - `GET /admin/suppliers`
-- `POST /admin/suppliers`
 - `POST /admin/suppliers/:supplierId/config`
 - `GET /admin/suppliers/:supplierId/sync-logs`
 - `GET /admin/suppliers/reconcile-diffs`

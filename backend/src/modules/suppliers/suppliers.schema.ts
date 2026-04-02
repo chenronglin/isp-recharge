@@ -1,11 +1,5 @@
 import { t } from 'elysia';
 
-export const CreateSupplierBodySchema = t.Object({
-  supplierCode: t.String({ minLength: 2 }),
-  supplierName: t.String({ minLength: 1 }),
-  protocolType: t.String({ minLength: 1 }),
-});
-
 export const CreateSupplierConfigBodySchema = t.Object({
   supplierId: t.String(),
   configJson: t.Record(t.String(), t.Unknown()),

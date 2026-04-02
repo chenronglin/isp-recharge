@@ -58,6 +58,45 @@ export class LedgerRepository {
     return this.findAccount('PLATFORM', 'SYSTEM');
   }
 
+  async ensureChannelAccount(channelId: string): Promise<Account> {
+    await db`
+      INSERT INTO ledger.accounts (
+        id,
+        owner_type,
+        owner_id,
+        available_balance,
+        frozen_balance,
+        currency,
+        status,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${generateId()},
+        'CHANNEL',
+        ${channelId},
+        0,
+        0,
+        'CNY',
+        'ACTIVE',
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (owner_type, owner_id, currency) DO UPDATE
+      SET
+        status = 'ACTIVE',
+        updated_at = NOW()
+    `;
+
+    const account = await this.findAccount('CHANNEL', channelId);
+
+    if (!account) {
+      throw new Error('渠道余额账户创建失败');
+    }
+
+    return account;
+  }
+
   async findLedgerByReference(
     referenceType: string,
     referenceNo: string,
@@ -278,7 +317,7 @@ export class LedgerRepository {
 
   async createSingleLedger(input: {
     accountId: string;
-    orderNo: string;
+    orderNo?: string | null;
     actionType: string;
     direction: 'DEBIT' | 'CREDIT';
     amount: number;
@@ -387,7 +426,7 @@ export class LedgerRepository {
           ${generateId()},
           ${generateBusinessNo('ledger')},
           ${account.id},
-          ${input.orderNo},
+          ${input.orderNo ?? null},
           ${input.actionType},
           ${input.direction},
           ${input.amount},

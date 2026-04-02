@@ -16,7 +16,6 @@
 ## 核心接口
 
 - `GET /admin/suppliers`
-- `POST /admin/suppliers`
 - `POST /admin/supplier-configs`
 - `POST /internal/suppliers/orders/submit`
 - `POST /internal/suppliers/orders/query`
@@ -24,6 +23,7 @@
 
 ## 关键规则
 
+- 新供应商必须通过代码适配并由 seed/迁移固化主数据，不通过后台接口临时创建。
 - 供应商服务不直接改订单主表。
 - 回调与轮询统一输出标准状态。
 

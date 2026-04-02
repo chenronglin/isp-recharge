@@ -89,14 +89,6 @@ export class SuppliersService implements SupplierContract {
     return this.repository.listSyncLogsBySupplierId(input.supplierId);
   }
 
-  async createSupplier(input: {
-    supplierCode: string;
-    supplierName: string;
-    protocolType: string;
-  }) {
-    return this.repository.createSupplier(input);
-  }
-
   async upsertConfig(input: {
     supplierId: string;
     configJson: Record<string, unknown>;
