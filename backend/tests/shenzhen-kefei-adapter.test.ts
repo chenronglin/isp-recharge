@@ -10,6 +10,14 @@ import {
   verifyKefeiCallbackSign,
 } from '@/modules/suppliers/adapters/shenzhen-kefei.protocol';
 
+function createMockFetch(responseFactory: () => Response): typeof fetch {
+  return (async () => responseFactory()) as unknown as typeof fetch;
+}
+
+function gbkJsonResponse(payload: unknown): Response {
+  return new Response(new Uint8Array(iconv.encode(JSON.stringify(payload), 'gbk')));
+}
+
 describe('shenzhen kefei protocol primitives', () => {
   test('buildKefeiPayload builds stable busiBodyText and sign', () => {
     const payload = buildKefeiPayload({
@@ -69,21 +77,16 @@ describe('shenzhen kefei protocol primitives', () => {
 describe('shenzhen kefei adapter', () => {
   test('getBalance returns normalized supplier balance', async () => {
     const originFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      return new Response(
-        iconv.encode(
-          JSON.stringify({
-            errorCode: 1,
-            errorDesc: 'success',
-            agentAccount: 'JG18948358181',
-            agentName: '深圳科飞',
-            agentBalance: 188.6,
-            agentProfit: 23.4,
-          }),
-          'gbk',
-        ),
-      );
-    }) as typeof fetch;
+    globalThis.fetch = createMockFetch(() =>
+      gbkJsonResponse({
+        errorCode: 1,
+        errorDesc: 'success',
+        agentAccount: 'JG18948358181',
+        agentName: '深圳科飞',
+        agentBalance: 188.6,
+        agentProfit: 23.4,
+      }),
+    );
 
     try {
       const adapter = new ShenzhenKefeiAdapter({
@@ -108,28 +111,23 @@ describe('shenzhen kefei adapter', () => {
 
   test('syncCatalog maps upstream dataset to platform items', async () => {
     const originFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      return new Response(
-        iconv.encode(
-          JSON.stringify({
-            errorCode: 1,
-            dataset: [
-              {
-                itemId: 'kefei-cmcc-gd-50',
-                itemName: '广东移动 50 元',
-                ispName: 'CMCC',
-                province: '广东',
-                parValue: 50,
-                inPrice: 47.25,
-                stock: 88,
-                salesStatus: 'ON_SALE',
-              },
-            ],
-          }),
-          'gbk',
-        ),
-      );
-    }) as typeof fetch;
+    globalThis.fetch = createMockFetch(() =>
+      gbkJsonResponse({
+        errorCode: 1,
+        dataset: [
+          {
+            itemId: 'kefei-cmcc-gd-50',
+            itemName: '广东移动 50 元',
+            ispName: 'CMCC',
+            province: '广东',
+            parValue: 50,
+            inPrice: 47.25,
+            stock: 88,
+            salesStatus: 'ON_SALE',
+          },
+        ],
+      }),
+    );
 
     try {
       const adapter = new ShenzhenKefeiAdapter({
@@ -163,88 +161,83 @@ describe('shenzhen kefei adapter', () => {
 
   test('syncCatalog filters non-voice, non-mainland, unsupported amount items and normalizes province aliases', async () => {
     const originFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      return new Response(
-        iconv.encode(
-          JSON.stringify({
-            errorCode: 1,
-            dataset: [
-              {
-                itemId: 'kefei-valid-cmcc-gd-50',
-                itemName: '广东移动50元',
-                ispName: '移动',
-                province: '广东',
-                amount: 50,
-                discount: 94.5,
-                stock: 88,
-                salesStatus: 'ON_SALE',
-              },
-              {
-                itemId: 'kefei-invalid-flow',
-                itemName: '广东移动国包流量60G',
-                ispName: '移动',
-                province: '广东',
-                amount: 10,
-                inPrice: 9.5,
-                stock: 99,
-                salesStatus: 'ON_SALE',
-              },
-              {
-                itemId: 'kefei-invalid-qcoin',
-                itemName: '腾讯Q币直通车按元直充【内蒙古】',
-                ispName: '移动',
-                province: '内蒙',
-                amount: 30,
-                inPrice: 28.5,
-                stock: 99,
-                salesStatus: 'ON_SALE',
-              },
-              {
-                itemId: 'kefei-invalid-national',
-                itemName: '全国电信100元',
-                ispName: '电信',
-                province: '全国',
-                amount: 100,
-                inPrice: 96,
-                stock: 99,
-                salesStatus: 'ON_SALE',
-              },
-              {
-                itemId: 'kefei-invalid-unknown',
-                itemName: '壳牌加油卡10元',
-                ispName: '未知',
-                province: '广东',
-                amount: 10,
-                inPrice: 9.2,
-                stock: 99,
-                salesStatus: 'ON_SALE',
-              },
-              {
-                itemId: 'kefei-invalid-zero',
-                itemName: '浙江电信3',
-                ispName: '电信',
-                province: '浙江',
-                amount: 0,
-                inPrice: 0,
-                stock: 99,
-                salesStatus: 'ON_SALE',
-              },
-              {
-                itemId: 'kefei-valid-cucc-nmg-30',
-                itemName: '内蒙联通30元',
-                ispName: '联通',
-                province: '内蒙',
-                amount: 30,
-                inPrice: 28.8,
-                stock: 77,
-                salesStatus: 'ON_SALE',
-              },
-            ],
-          }),
-          'gbk',
-        ),
-      );
-    }) as typeof fetch;
+    globalThis.fetch = createMockFetch(() =>
+      gbkJsonResponse({
+        errorCode: 1,
+        dataset: [
+          {
+            itemId: 'kefei-valid-cmcc-gd-50',
+            itemName: '广东移动50元',
+            ispName: '移动',
+            province: '广东',
+            amount: 50,
+            discount: 94.5,
+            stock: 88,
+            salesStatus: 'ON_SALE',
+          },
+          {
+            itemId: 'kefei-invalid-flow',
+            itemName: '广东移动国包流量60G',
+            ispName: '移动',
+            province: '广东',
+            amount: 10,
+            inPrice: 9.5,
+            stock: 99,
+            salesStatus: 'ON_SALE',
+          },
+          {
+            itemId: 'kefei-invalid-qcoin',
+            itemName: '腾讯Q币直通车按元直充【内蒙古】',
+            ispName: '移动',
+            province: '内蒙',
+            amount: 30,
+            inPrice: 28.5,
+            stock: 99,
+            salesStatus: 'ON_SALE',
+          },
+          {
+            itemId: 'kefei-invalid-national',
+            itemName: '全国电信100元',
+            ispName: '电信',
+            province: '全国',
+            amount: 100,
+            inPrice: 96,
+            stock: 99,
+            salesStatus: 'ON_SALE',
+          },
+          {
+            itemId: 'kefei-invalid-unknown',
+            itemName: '壳牌加油卡10元',
+            ispName: '未知',
+            province: '广东',
+            amount: 10,
+            inPrice: 9.2,
+            stock: 99,
+            salesStatus: 'ON_SALE',
+          },
+          {
+            itemId: 'kefei-invalid-zero',
+            itemName: '浙江电信3',
+            ispName: '电信',
+            province: '浙江',
+            amount: 0,
+            inPrice: 0,
+            stock: 99,
+            salesStatus: 'ON_SALE',
+          },
+          {
+            itemId: 'kefei-valid-cucc-nmg-30',
+            itemName: '内蒙联通30元',
+            ispName: '联通',
+            province: '内蒙',
+            amount: 30,
+            inPrice: 28.8,
+            stock: 77,
+            salesStatus: 'ON_SALE',
+          },
+        ],
+      }),
+    );
 
     try {
       const adapter = new ShenzhenKefeiAdapter({
@@ -293,18 +286,13 @@ describe('shenzhen kefei adapter', () => {
 
   test('syncCatalog throws when upstream CHECK_SPU returns non-success errorCode', async () => {
     const originFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      return new Response(
-        iconv.encode(
-          JSON.stringify({
-            errorCode: -301,
-            errorDesc: 'catalog temporarily unavailable',
-            dataset: [],
-          }),
-          'gbk',
-        ),
-      );
-    }) as typeof fetch;
+    globalThis.fetch = createMockFetch(() =>
+      gbkJsonResponse({
+        errorCode: -301,
+        errorDesc: 'catalog temporarily unavailable',
+        dataset: [],
+      }),
+    );
 
     try {
       const adapter = new ShenzhenKefeiAdapter({
@@ -312,11 +300,8 @@ describe('shenzhen kefei adapter', () => {
         agentAccount: 'JG18948358181',
         md5Key: 'F29C80BB80EA32D4',
       });
-      const error = await adapter.syncCatalog().catch((reason) => reason as Error);
-
-      expect(error).toBeInstanceOf(Error);
-      expect(error.message).toContain('-301');
-      expect(error.message).toContain('catalog temporarily unavailable');
+      await expect(adapter.syncCatalog()).rejects.toThrow('-301');
+      await expect(adapter.syncCatalog()).rejects.toThrow('catalog temporarily unavailable');
     } finally {
       globalThis.fetch = originFetch;
     }
@@ -324,18 +309,18 @@ describe('shenzhen kefei adapter', () => {
 
   test('submitOrder returns ACCEPTED and chargeId when errorCode is 1', async () => {
     const originFetch = globalThis.fetch;
-    globalThis.fetch = (async () => {
-      const encoder = new TextEncoder();
-      return new Response(
-        encoder.encode(
-          JSON.stringify({
-            errorCode: 1,
-            errorDesc: 'success',
-            chargeId: 'KF202603310001',
-          }),
+    globalThis.fetch = createMockFetch(
+      () =>
+        new Response(
+          new TextEncoder().encode(
+            JSON.stringify({
+              errorCode: 1,
+              errorDesc: 'success',
+              chargeId: 'KF202603310001',
+            }),
+          ),
         ),
-      );
-    }) as typeof fetch;
+    );
 
     try {
       const adapter = new ShenzhenKefeiAdapter({

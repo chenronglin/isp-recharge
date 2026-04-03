@@ -188,7 +188,7 @@ export class ShenzhenKefeiAdapter implements SupplierAdapter {
       headers: {
         'content-type': 'application/json;charset=GBK',
       },
-      body: payload.bodyBuffer,
+      body: new Uint8Array(payload.bodyBuffer),
     });
 
     if (!response.ok) {

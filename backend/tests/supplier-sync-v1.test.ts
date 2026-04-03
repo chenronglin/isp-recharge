@@ -19,7 +19,11 @@ import {
 
 let runtime: Awaited<ReturnType<typeof buildApp>>;
 
-const migrationFile = join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql');
+const migrationFiles = [
+  join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql'),
+  join(import.meta.dir, '../src/database/migrations/0002_add_login_sessions.sql'),
+  join(import.meta.dir, '../src/database/migrations/0003_add_admin_security_logs.sql'),
+];
 
 async function rebuildManagedSchemas() {
   await db.unsafe(`
@@ -35,7 +39,9 @@ async function rebuildManagedSchemas() {
     DROP TABLE IF EXISTS public.app_migrations;
   `);
 
-  await executeFile(migrationFile);
+  for (const migrationFile of migrationFiles) {
+    await executeFile(migrationFile);
+  }
 }
 
 function normalizeJsonLike(input: unknown) {
@@ -266,25 +272,27 @@ test('全量目录同步命中现有业务键时会复用已有平台商品并�
       md5Key: 'F29C80BB80EA32D4',
       fetchImpl: (async () =>
         new Response(
-          iconv.encode(
-            JSON.stringify({
-              errorCode: 1,
-              dataset: [
-                {
-                  itemId: 'kefei-cmcc-gd-50',
-                  itemName: '广东移动 50 元',
-                  ispName: 'CMCC',
-                  province: '广东',
-                  parValue: 50,
-                  inPrice: 47.25,
-                  stock: 88,
-                  salesStatus: 'ON_SALE',
-                },
-              ],
-            }),
-            'gbk',
+          new Uint8Array(
+            iconv.encode(
+              JSON.stringify({
+                errorCode: 1,
+                dataset: [
+                  {
+                    itemId: 'kefei-cmcc-gd-50',
+                    itemName: '广东移动 50 元',
+                    ispName: 'CMCC',
+                    province: '广东',
+                    parValue: 50,
+                    inPrice: 47.25,
+                    stock: 88,
+                    salesStatus: 'ON_SALE',
+                  },
+                ],
+              }),
+              'gbk',
+            ),
           ),
-        )) as typeof fetch,
+        )) as unknown as typeof fetch,
     });
     const catalog = await adapter.syncCatalog();
     const synced = await runtime.services.suppliers.syncFullCatalog({

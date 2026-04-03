@@ -30,6 +30,21 @@ export async function releaseIntegrationTestLock() {
 
 export async function resetTestState() {
   await db.unsafe(`
+    ALTER TABLE iam.admin_users
+      ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+      ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+
+    CREATE TABLE IF NOT EXISTS iam.login_logs (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NULL REFERENCES iam.admin_users(id),
+      username TEXT NOT NULL,
+      ip TEXT NOT NULL,
+      device_summary TEXT NOT NULL DEFAULT '',
+      result TEXT NOT NULL,
+      failure_reason TEXT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS supplier.supplier_orders (
       id TEXT PRIMARY KEY,
       order_no TEXT NOT NULL,

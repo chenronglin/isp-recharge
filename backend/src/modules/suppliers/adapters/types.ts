@@ -19,6 +19,9 @@ export interface SupplierCatalogSyncResult {
     inventoryQuantity: number;
     supplierProductCode: string;
     salesStatus?: string;
+    routeType?: string;
+    priority?: number;
+    mappingStatus?: string;
   }>;
 }
 

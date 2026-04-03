@@ -17,7 +17,11 @@ import { ShenzhenKefeiAdapter } from '@/modules/suppliers/adapters/shenzhen-kefe
 import { acquireIntegrationTestLock, releaseIntegrationTestLock } from './test-support';
 
 let runtime: Awaited<ReturnType<typeof buildApp>>;
-const migrationFile = join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql');
+const migrationFiles = [
+  join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql'),
+  join(import.meta.dir, '../src/database/migrations/0002_add_login_sessions.sql'),
+  join(import.meta.dir, '../src/database/migrations/0003_add_admin_security_logs.sql'),
+];
 
 function buildSignedHeaders(input: {
   path: string;
@@ -415,7 +419,9 @@ async function rebuildManagedSchemas() {
     DROP TABLE IF EXISTS public.app_migrations;
   `);
 
-  await executeFile(migrationFile);
+  for (const migrationFile of migrationFiles) {
+    await executeFile(migrationFile);
+  }
 }
 
 async function processWorkerRound() {
@@ -509,25 +515,27 @@ describe.serial('V1 ISP 充值下单链路', () => {
         md5Key: 'F29C80BB80EA32D4',
         fetchImpl: (async () =>
           new Response(
-            iconv.encode(
-              JSON.stringify({
-                errorCode: 1,
-                dataset: [
-                  {
-                    itemId: 'kefei-cmcc-mixed-50',
-                    itemName: '广东移动 50 元',
-                    ispName: 'CMCC',
-                    province: '广东',
-                    parValue: 50,
-                    inPrice: 48.5,
-                    stock: 100,
-                    salesStatus: 'ON_SALE',
-                  },
-                ],
-              }),
-              'gbk',
+            new Uint8Array(
+              iconv.encode(
+                JSON.stringify({
+                  errorCode: 1,
+                  dataset: [
+                    {
+                      itemId: 'kefei-cmcc-mixed-50',
+                      itemName: '广东移动 50 元',
+                      ispName: 'CMCC',
+                      province: '广东',
+                      parValue: 50,
+                      inPrice: 48.5,
+                      stock: 100,
+                      salesStatus: 'ON_SALE',
+                    },
+                  ],
+                }),
+                'gbk',
+              ),
             ),
-          )) as typeof fetch,
+          )) as unknown as typeof fetch,
       });
       const catalog = await adapter.syncCatalog();
       const syncResult = await runtime.services.suppliers.syncFullCatalog({
