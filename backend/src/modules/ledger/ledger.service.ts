@@ -13,6 +13,16 @@ export class LedgerService implements LedgerContract {
     return this.repository.listLedgerEntries();
   }
 
+  async getLedgerEntryById(entryId: string) {
+    const entry = await this.repository.findLedgerEntryById(entryId);
+
+    if (!entry) {
+      throw notFound('账务流水不存在');
+    }
+
+    return entry;
+  }
+
   async rechargeChannelBalance(input: {
     channelId: string;
     amount: number;

@@ -3,6 +3,7 @@ import { db, first } from '@/lib/sql';
 import { parseJsonValue } from '@/lib/utils';
 import { notificationsSql } from '@/modules/notifications/notifications.sql';
 import type {
+  NotificationDeliveryLog,
   NotificationTask,
   NotificationTaskType,
 } from '@/modules/notifications/notifications.types';
@@ -12,6 +13,13 @@ export class NotificationsRepository {
     return {
       ...row,
       payloadJson: parseJsonValue(row.payloadJson, {}),
+    };
+  }
+
+  private mapDeliveryLog(row: NotificationDeliveryLog): NotificationDeliveryLog {
+    return {
+      ...row,
+      requestPayloadJson: parseJsonValue(row.requestPayloadJson, {}),
     };
   }
 
@@ -65,6 +73,28 @@ export class NotificationsRepository {
     `);
 
     return row ? this.mapTask(row) : null;
+  }
+
+  async listRecentDeliveryLogsByTaskNo(
+    taskNo: string,
+    limit = 10,
+  ): Promise<NotificationDeliveryLog[]> {
+    const rows = await db<NotificationDeliveryLog[]>`
+      SELECT
+        id,
+        task_no AS "taskNo",
+        request_payload_json AS "requestPayloadJson",
+        response_status AS "responseStatus",
+        response_body AS "responseBody",
+        success,
+        created_at AS "createdAt"
+      FROM notification.notification_delivery_logs
+      WHERE task_no = ${taskNo}
+      ORDER BY created_at DESC, id DESC
+      LIMIT ${limit}
+    `;
+
+    return rows.map((row) => this.mapDeliveryLog(row));
   }
 
   async createTask(input: {

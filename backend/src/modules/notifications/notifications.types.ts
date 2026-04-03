@@ -18,3 +18,18 @@ export interface NotificationTask {
   maxAttempts: number;
   lastError: string | null;
 }
+
+export interface NotificationDeliveryLog {
+  id: string;
+  taskNo: string;
+  requestPayloadJson: Record<string, unknown>;
+  responseStatus: string;
+  responseBody: string;
+  success: boolean;
+  createdAt: string;
+}
+
+export interface NotificationTaskDetail {
+  task: NotificationTask;
+  recentDeliveries: NotificationDeliveryLog[];
+}

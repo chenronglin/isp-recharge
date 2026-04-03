@@ -7,7 +7,10 @@ import { ok } from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
 import {
+  SupplierCatalogDeltaSyncBodySchema,
+  SupplierCatalogFullSyncBodySchema,
   CreateSupplierConfigBodySchema,
+  SupplierReconcileBodySchema,
   SupplierQueryBodySchema,
   SupplierSubmitBodySchema,
 } from '@/modules/suppliers/suppliers.schema';
@@ -69,6 +72,30 @@ export function createSuppliersRoutes({
       },
     )
     .get(
+      '/admin/suppliers/reconcile-diffs',
+      async ({ query, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
+        return ok(
+          requestId,
+          await suppliersService.listReconcileDiffs({
+            reconcileDate:
+              typeof query.reconcileDate === 'string' ? query.reconcileDate : undefined,
+            orderNo: typeof query.orderNo === 'string' ? query.orderNo : undefined,
+          }),
+        );
+      },
+      {
+        detail: {
+          tags: ['admin'],
+          summary: '查询供应商对账差异',
+          description: '后台查询供应商订单差异明细，支持按对账日期或订单号过滤。',
+        },
+      },
+    )
+    .get(
       '/admin/suppliers/:supplierId/balance',
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
@@ -121,6 +148,42 @@ export function createSuppliersRoutes({
           tags: ['admin'],
           summary: '手工触发目录同步',
           description: '后台手工触发供应商全量目录同步，刷新商品映射与库存状态。',
+        },
+      },
+    )
+    .post(
+      '/admin/suppliers/:supplierId/recover-circuit-breaker',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
+        const result = await suppliersService.recoverCircuitBreaker({
+          supplierId: params.supplierId,
+        });
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'RECOVER_SUPPLIER_CIRCUIT_BREAKER',
+          resourceType: 'SUPPLIER',
+          resourceId: params.supplierId,
+          details: {
+            supplierId: params.supplierId,
+            breakerStatus: result.breakerStatus,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
+        return ok(requestId, result);
+      },
+      {
+        detail: {
+          tags: ['admin'],
+          summary: '人工恢复供应商熔断',
+          description: '后台人工解除供应商运行时熔断状态，使其重新参与自动路由。',
         },
       },
     )
@@ -184,7 +247,7 @@ export function createSuppliersRoutes({
       },
     );
 
-  const internalRoutes = new Elysia({ prefix: '/internal/suppliers/orders' })
+  const internalOrderRoutes = new Elysia({ prefix: '/internal/suppliers/orders' })
     .post(
       '/submit',
       async ({ body, request }) => {
@@ -220,6 +283,60 @@ export function createSuppliersRoutes({
       },
     );
 
+  const internalCatalogRoutes = new Elysia({ prefix: '/internal/suppliers/catalog' })
+    .post(
+      '/full-sync',
+      async ({ body, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        await verifyInternalAuthorizationHeader(request.headers.get('authorization'));
+        await suppliersService.handleCatalogFullSyncJob(body as Record<string, unknown>);
+        return ok(requestId, { success: true });
+      },
+      {
+        body: SupplierCatalogFullSyncBodySchema,
+        detail: {
+          tags: ['internal'],
+          summary: '执行供应商全量目录同步',
+          description: '内部服务触发供应商全量目录同步任务，刷新平台映射基线。',
+        },
+      },
+    )
+    .post(
+      '/delta-sync',
+      async ({ body, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        await verifyInternalAuthorizationHeader(request.headers.get('authorization'));
+        await suppliersService.handleCatalogDeltaSyncJob(body as Record<string, unknown>);
+        return ok(requestId, { success: true });
+      },
+      {
+        body: SupplierCatalogDeltaSyncBodySchema,
+        detail: {
+          tags: ['internal'],
+          summary: '执行供应商动态目录同步',
+          description: '内部服务触发供应商动态库存与价格同步任务。',
+        },
+      },
+    );
+
+  const internalReconcileRoutes = new Elysia({ prefix: '/internal/suppliers/reconcile' }).post(
+    '/orders',
+    async ({ body, request }) => {
+      const requestId = getRequestIdFromRequest(request);
+      await verifyInternalAuthorizationHeader(request.headers.get('authorization'));
+      await suppliersService.handleReconcileJob(body as Record<string, unknown>);
+      return ok(requestId, { success: true });
+    },
+    {
+      body: SupplierReconcileBodySchema,
+      detail: {
+        tags: ['internal'],
+        summary: '执行供应商订单对账',
+        description: '内部服务触发在途差异扫描或日对账，输出对账差异结果。',
+      },
+    },
+  );
+
   const callbackRoutes = new Elysia({ prefix: '/callbacks/suppliers' }).post(
     '/:supplierCode',
     async ({ params, request }) => {
@@ -254,5 +371,10 @@ export function createSuppliersRoutes({
     },
   );
 
-  return new Elysia().use(adminRoutes).use(internalRoutes).use(callbackRoutes);
+  return new Elysia()
+    .use(adminRoutes)
+    .use(internalOrderRoutes)
+    .use(internalCatalogRoutes)
+    .use(internalReconcileRoutes)
+    .use(callbackRoutes);
 }

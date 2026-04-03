@@ -6,6 +6,7 @@ export const workerJobTypes = [
   'supplier.reconcile.inflight',
   'supplier.reconcile.daily',
   'order.timeout.scan',
+  'order.refund.retry',
   'notification.deliver',
 ] as const;
 

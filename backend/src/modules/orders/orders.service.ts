@@ -10,6 +10,7 @@ import type {
   OpenOrderEventRecord,
   OpenOrderRecord,
   OrderEventRecord,
+  OrderListFilters,
   OrderRecord,
 } from '@/modules/orders/orders.types';
 import type { ProductContract } from '@/modules/products/contracts';
@@ -47,8 +48,8 @@ export class OrdersService implements OrderContract {
     this.notificationsRepository = notificationsRepository;
   }
 
-  async listOrders() {
-    return this.repository.listOrders();
+  async listOrders(filters: OrderListFilters = {}) {
+    return this.repository.listOrders(filters);
   }
 
   async getOrderByNo(orderNo: string): Promise<OrderRecord> {
@@ -354,16 +355,8 @@ export class OrdersService implements OrderContract {
       requestId: currentOrder.requestId,
     });
 
-    const refund = await this.ledgerContract.refundOrderAmount({
-      channelId: currentOrder.channelId,
-      orderNo: currentOrder.orderNo,
-      amount: currentOrder.salePrice,
-    });
-
-    await this.handleRefundSucceeded({
-      orderNo: currentOrder.orderNo,
-      sourceService: 'ledger',
-      sourceNo: refund.referenceNo,
+    await this.refundPendingOrder(currentOrder, {
+      throwOnFailure: false,
     });
   }
 
@@ -390,6 +383,70 @@ export class OrdersService implements OrderContract {
       latestTask.taskNo,
       new Date(scheduledJob.nextRunAt),
     );
+  }
+
+  private async scheduleRefundRetry(order: OrderRecord) {
+    await this.workerContract.schedule({
+      jobType: 'order.refund.retry',
+      businessKey: order.orderNo,
+      payload: {
+        orderNo: order.orderNo,
+      },
+      maxAttempts: 7,
+      nextRunAt: new Date(),
+    });
+  }
+
+  private async refundPendingOrder(
+    order: OrderRecord,
+    options: {
+      throwOnFailure: boolean;
+    },
+  ) {
+    if (order.mainStatus === 'REFUNDED') {
+      await this.handleRefundSucceeded({
+        orderNo: order.orderNo,
+        sourceService: 'ledger',
+        sourceNo: null,
+      });
+      return;
+    }
+
+    if (order.mainStatus !== 'REFUNDING' || order.refundStatus !== 'PENDING') {
+      return;
+    }
+
+    try {
+      const refund = await this.ledgerContract.refundOrderAmount({
+        channelId: order.channelId,
+        orderNo: order.orderNo,
+        amount: order.salePrice,
+      });
+
+      await this.handleRefundSucceeded({
+        orderNo: order.orderNo,
+        sourceService: 'ledger',
+        sourceNo: refund.referenceNo,
+      });
+    } catch (error) {
+      if (options.throwOnFailure) {
+        throw error;
+      }
+
+      await this.scheduleRefundRetry(order);
+    }
+  }
+
+  async handleRefundRetryJob(payload: Record<string, unknown>) {
+    const orderNo = String(payload.orderNo ?? '');
+
+    if (!orderNo) {
+      throw badRequest('退款补偿任务缺少订单号');
+    }
+
+    await this.refundPendingOrder(await this.getOrderByNo(orderNo), {
+      throwOnFailure: true,
+    });
   }
 
   async closeOrder(orderNo: string, requestId: string) {
@@ -423,16 +480,8 @@ export class OrdersService implements OrderContract {
         requestId,
       });
 
-      const refund = await this.ledgerContract.refundOrderAmount({
-        channelId: order.channelId,
-        orderNo,
-        amount: order.salePrice,
-      });
-
-      await this.handleRefundSucceeded({
-        orderNo,
-        sourceService: 'ledger',
-        sourceNo: refund.referenceNo,
+      await this.refundPendingOrder(await this.getOrderByNo(orderNo), {
+        throwOnFailure: false,
       });
       return;
     }
@@ -557,16 +606,8 @@ export class OrdersService implements OrderContract {
         continue;
       }
 
-      const refund = await this.ledgerContract.refundOrderAmount({
-        channelId: currentOrder.channelId,
-        orderNo: currentOrder.orderNo,
-        amount: currentOrder.salePrice,
-      });
-
-      await this.handleRefundSucceeded({
-        orderNo: currentOrder.orderNo,
-        sourceService: 'orders',
-        sourceNo: refund.referenceNo,
+      await this.refundPendingOrder(currentOrder, {
+        throwOnFailure: false,
       });
     }
 
@@ -740,16 +781,8 @@ export class OrdersService implements OrderContract {
       requestId: order.requestId,
     });
 
-    const refund = await this.ledgerContract.refundOrderAmount({
-      channelId: order.channelId,
-      orderNo: order.orderNo,
-      amount: order.salePrice,
-    });
-
-    await this.handleRefundSucceeded({
-      orderNo: order.orderNo,
-      sourceService: 'ledger',
-      sourceNo: refund.referenceNo,
+    await this.refundPendingOrder(await this.getOrderByNo(order.orderNo), {
+      throwOnFailure: false,
     });
   }
 

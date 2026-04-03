@@ -55,6 +55,23 @@ export function createLedgerRoutes({
         },
       },
     )
+    .get(
+      '/admin/ledger-entries/:entryId',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['FINANCE']);
+        return ok(requestId, await ledgerService.getLedgerEntryById(params.entryId));
+      },
+      {
+        detail: {
+          tags: ['admin'],
+          summary: '查询账务流水详情',
+          description: '后台根据流水主键查询单笔账务变动详情，用于财务核对和退款排查。',
+        },
+      },
+    )
     .post(
       '/admin/channels/:channelId/recharge',
       async ({ body, params, request }) => {

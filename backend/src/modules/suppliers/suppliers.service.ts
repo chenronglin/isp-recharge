@@ -27,6 +27,44 @@ const supplierQueryScheduleMinutes = {
   MIXED: [5, 15, 30, 60, 90, 120, 150, 180],
 } as const;
 
+const runtimeBreakerFailureThreshold = 3;
+const runtimeBreakerRecoveryTimeoutSeconds = 30 * 60;
+
+type SupplierRequestStatus =
+  | 'SUCCESS'
+  | 'QUERYING'
+  | 'TIMEOUT'
+  | 'OUT_OF_STOCK'
+  | 'MAINTENANCE'
+  | 'PROTOCOL_FAIL';
+
+function isTimeoutError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message.toLowerCase() : '';
+  return message.includes('timeout') || message.includes('timed out') || message.includes('abort');
+}
+
+function classifyFailureReason(reason: string): SupplierRequestStatus {
+  const normalized = reason.toLowerCase();
+
+  if (
+    normalized.includes('库存不足') ||
+    normalized.includes('out_of_stock') ||
+    normalized.includes('out of stock')
+  ) {
+    return 'OUT_OF_STOCK';
+  }
+
+  if (
+    normalized.includes('维护') ||
+    normalized.includes('maintenance') ||
+    normalized.includes('under_maintenance')
+  ) {
+    return 'MAINTENANCE';
+  }
+
+  return 'PROTOCOL_FAIL';
+}
+
 export class SuppliersService implements SupplierContract {
   constructor(
     private readonly repository: Repository,
@@ -51,7 +89,37 @@ export class SuppliersService implements SupplierContract {
       throw badRequest('当前供应商不支持余额查询');
     }
 
-    return adapter.getBalance();
+    const startedAt = Date.now();
+
+    try {
+      const result = await adapter.getBalance();
+
+      await this.repository.addRequestLog({
+        supplierId: supplier.id,
+        requestPayloadJson: {
+          action: 'GET_BALANCE',
+        },
+        responsePayloadJson: result as unknown as Record<string, unknown>,
+        requestStatus: 'SUCCESS',
+        durationMs: Date.now() - startedAt,
+      });
+
+      return result;
+    } catch (error) {
+      await this.repository.addRequestLog({
+        supplierId: supplier.id,
+        requestPayloadJson: {
+          action: 'GET_BALANCE',
+        },
+        responsePayloadJson: {
+          errorMessage: error instanceof Error ? error.message : '供应商余额查询失败',
+        },
+        requestStatus: isTimeoutError(error) ? 'TIMEOUT' : 'PROTOCOL_FAIL',
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(supplier.id);
+      throw error;
+    }
   }
 
   async triggerCatalogSync(input: { supplierId: string }) {
@@ -67,16 +135,7 @@ export class SuppliersService implements SupplierContract {
       throw badRequest('当前供应商不支持目录同步');
     }
 
-    const result = await adapter.syncCatalog();
-    const synced = await this.syncFullCatalog({
-      supplierCode: supplier.supplierCode,
-      items: result.items,
-    });
-
-    return {
-      supplierCode: supplier.supplierCode,
-      syncedProducts: synced.syncedProducts,
-    };
+    return this.pullFullCatalogForSupplier(supplier);
   }
 
   async listSyncLogs(input: { supplierId: string }) {
@@ -97,6 +156,28 @@ export class SuppliersService implements SupplierContract {
     timeoutMs: number;
   }) {
     await this.repository.upsertConfig(input);
+  }
+
+  async listReconcileDiffs(input?: { reconcileDate?: string; orderNo?: string }) {
+    return this.repository.listReconcileDiffs(input);
+  }
+
+  async recoverCircuitBreaker(input: { supplierId: string }) {
+    const supplier = await this.repository.findSupplierById(input.supplierId);
+
+    if (!supplier) {
+      throw notFound('供应商不存在');
+    }
+
+    return this.repository.upsertRuntimeBreaker({
+      supplierId: supplier.id,
+      breakerStatus: 'CLOSED',
+      failCountWindow: 0,
+      failThreshold: runtimeBreakerFailureThreshold,
+      openedAt: null,
+      lastProbeAt: new Date(),
+      recoveryTimeoutSeconds: runtimeBreakerRecoveryTimeoutSeconds,
+    });
   }
 
   async syncFullCatalog(input: {
@@ -239,7 +320,7 @@ export class SuppliersService implements SupplierContract {
     }
 
     const adapter = await this.getAdapterBySupplierId(String(primarySupplier.supplierId));
-    const submitResult = await adapter.submitOrder({
+    const requestPayload = {
       orderNo: payload.orderNo,
       productId: order.matchedProductId,
       supplierProductCode: String(primarySupplier.supplierProductCode),
@@ -251,7 +332,43 @@ export class SuppliersService implements SupplierContract {
         (order.callbackSnapshotJson.callbackConfig as Record<string, unknown> | undefined)
           ?.callbackUrl ?? '',
       ),
-    });
+    };
+    const startedAt = Date.now();
+    let submitResult: Awaited<ReturnType<SupplierAdapter['submitOrder']>>;
+
+    try {
+      submitResult = await adapter.submitOrder(requestPayload);
+      await this.repository.addRequestLog({
+        supplierId: String(primarySupplier.supplierId),
+        orderNo: payload.orderNo,
+        supplierProductCode: String(primarySupplier.supplierProductCode),
+        requestPayloadJson: requestPayload,
+        responsePayloadJson: submitResult as Record<string, unknown>,
+        requestStatus: 'SUCCESS',
+        attemptNo: 1,
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(String(primarySupplier.supplierId));
+    } catch (error) {
+      const requestStatus = isTimeoutError(error)
+        ? 'TIMEOUT'
+        : classifyFailureReason(error instanceof Error ? error.message : '供应商提单失败');
+
+      await this.repository.addRequestLog({
+        supplierId: String(primarySupplier.supplierId),
+        orderNo: payload.orderNo,
+        supplierProductCode: String(primarySupplier.supplierProductCode),
+        requestPayloadJson: requestPayload,
+        responsePayloadJson: {
+          errorMessage: error instanceof Error ? error.message : '供应商提单失败',
+        },
+        requestStatus,
+        attemptNo: 1,
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(String(primarySupplier.supplierId));
+      throw error;
+    }
 
     const supplierOrder = await this.repository.createSupplierOrder({
       orderNo: payload.orderNo,
@@ -306,11 +423,48 @@ export class SuppliersService implements SupplierContract {
     }
 
     const adapter = await this.getAdapterBySupplierId(supplierOrder.supplierId);
-    const queryResult = await adapter.queryOrder({
+    const requestPayload = {
       supplierOrderNo: payload.supplierOrderNo,
       attemptIndex: payload.attemptIndex,
       orderNo: payload.orderNo,
-    });
+    };
+    const startedAt = Date.now();
+    let queryResult: Awaited<ReturnType<SupplierAdapter['queryOrder']>>;
+
+    try {
+      queryResult = await adapter.queryOrder(requestPayload);
+      await this.repository.addRequestLog({
+        supplierId: supplierOrder.supplierId,
+        orderNo: payload.orderNo,
+        requestPayloadJson: requestPayload,
+        responsePayloadJson: queryResult as Record<string, unknown>,
+        requestStatus:
+          queryResult.status === 'SUCCESS'
+            ? 'SUCCESS'
+            : queryResult.status === 'QUERYING'
+              ? 'QUERYING'
+              : classifyFailureReason(queryResult.reason ?? '供应商查单失败'),
+        attemptNo: payload.attemptIndex + 1,
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(supplierOrder.supplierId);
+    } catch (error) {
+      await this.repository.addRequestLog({
+        supplierId: supplierOrder.supplierId,
+        orderNo: payload.orderNo,
+        requestPayloadJson: requestPayload,
+        responsePayloadJson: {
+          errorMessage: error instanceof Error ? error.message : '供应商查单失败',
+        },
+        requestStatus: isTimeoutError(error)
+          ? 'TIMEOUT'
+          : classifyFailureReason(error instanceof Error ? error.message : '供应商查单失败'),
+        attemptNo: payload.attemptIndex + 1,
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(supplierOrder.supplierId);
+      throw error;
+    }
 
     if (queryResult.status === 'FAIL') {
       await this.repository.updateSupplierOrderStatus(payload.supplierOrderNo, 'FAIL', {
@@ -374,11 +528,58 @@ export class SuppliersService implements SupplierContract {
     });
   }
 
+  async handleCatalogFullSyncJob(payload: Record<string, unknown>) {
+    if (
+      typeof payload.supplierCode === 'string' &&
+      Array.isArray(payload.items) &&
+      payload.items.length > 0
+    ) {
+      await this.syncFullCatalog({
+        supplierCode: payload.supplierCode,
+        items: payload.items as SupplierCatalogItem[],
+      });
+      return;
+    }
+
+    await this.pullFullCatalog({
+      supplierCode: typeof payload.supplierCode === 'string' ? payload.supplierCode : undefined,
+    });
+  }
+
+  async handleCatalogDeltaSyncJob(payload: Record<string, unknown>) {
+    if (
+      typeof payload.supplierCode === 'string' &&
+      Array.isArray(payload.items) &&
+      payload.items.length > 0
+    ) {
+      await this.syncDynamicCatalog({
+        supplierCode: payload.supplierCode,
+        items: payload.items as SupplierDynamicItem[],
+      });
+      return;
+    }
+
+    await this.pullDynamicCatalog({
+      supplierCode: typeof payload.supplierCode === 'string' ? payload.supplierCode : undefined,
+    });
+  }
+
   async handleSupplierQueryJob(payload: Record<string, unknown>) {
     await this.queryOrder({
       orderNo: String(payload.orderNo ?? ''),
       supplierOrderNo: String(payload.supplierOrderNo ?? ''),
       attemptIndex: Number(payload.attemptIndex ?? 0),
+    });
+  }
+
+  async handleReconcileJob(payload: Record<string, unknown>) {
+    if (payload.onlyInflight === true) {
+      await this.runInflightReconcile();
+      return;
+    }
+
+    await this.runDailyReconcile({
+      reconcileDate: typeof payload.reconcileDate === 'string' ? payload.reconcileDate : undefined,
     });
   }
 
@@ -533,6 +734,241 @@ export class SuppliersService implements SupplierContract {
     return this.getAdapter(supplier.supplierCode);
   }
 
+  private async pullFullCatalog(input: { supplierCode?: string } = {}) {
+    const suppliers = await this.listSyncableSuppliers(input.supplierCode);
+
+    for (const supplier of suppliers) {
+      await this.pullFullCatalogForSupplier(supplier);
+    }
+  }
+
+  private async pullDynamicCatalog(input: { supplierCode?: string } = {}) {
+    const suppliers = await this.listSyncableSuppliers(input.supplierCode);
+
+    for (const supplier of suppliers) {
+      await this.pullDynamicCatalogForSupplier(supplier);
+    }
+  }
+
+  private async pullFullCatalogForSupplier(supplier: {
+    id: string;
+    supplierCode: string;
+  }): Promise<{ supplierCode: string; syncedProducts: string[] }> {
+    const adapter = await this.getAdapter(supplier.supplierCode);
+
+    if (!adapter.syncCatalog) {
+      throw badRequest('当前供应商不支持目录同步');
+    }
+
+    const startedAt = Date.now();
+
+    try {
+      const result = await adapter.syncCatalog();
+      await this.repository.addRequestLog({
+        supplierId: supplier.id,
+        requestPayloadJson: {
+          action: 'SYNC_CATALOG_FULL',
+          supplierCode: supplier.supplierCode,
+        },
+        responsePayloadJson: {
+          itemCount: result.items.length,
+        },
+        requestStatus: 'SUCCESS',
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(supplier.id);
+
+      const synced = await this.syncFullCatalog({
+        supplierCode: supplier.supplierCode,
+        items: result.items,
+      });
+
+      return {
+        supplierCode: supplier.supplierCode,
+        syncedProducts: synced.syncedProducts,
+      };
+    } catch (error) {
+      await this.repository.addRequestLog({
+        supplierId: supplier.id,
+        requestPayloadJson: {
+          action: 'SYNC_CATALOG_FULL',
+          supplierCode: supplier.supplierCode,
+        },
+        responsePayloadJson: {
+          errorMessage: error instanceof Error ? error.message : '供应商全量目录同步失败',
+        },
+        requestStatus: isTimeoutError(error) ? 'TIMEOUT' : 'PROTOCOL_FAIL',
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(supplier.id);
+      await this.repository.addProductSyncLog({
+        supplierId: supplier.id,
+        syncType: 'FULL',
+        status: 'FAIL',
+        requestPayloadJson: {
+          supplierCode: supplier.supplierCode,
+        },
+        responsePayloadJson: {},
+        errorMessage: error instanceof Error ? error.message : '供应商全量目录同步失败',
+      });
+      throw error;
+    }
+  }
+
+  private async pullDynamicCatalogForSupplier(supplier: {
+    id: string;
+    supplierCode: string;
+  }): Promise<{ supplierCode: string; updatedProducts: string[] }> {
+    const adapter = await this.getAdapter(supplier.supplierCode);
+
+    if (!adapter.syncCatalog) {
+      throw badRequest('当前供应商不支持动态目录同步');
+    }
+
+    const startedAt = Date.now();
+
+    try {
+      const result = await adapter.syncCatalog();
+      await this.repository.addRequestLog({
+        supplierId: supplier.id,
+        requestPayloadJson: {
+          action: 'SYNC_CATALOG_DYNAMIC',
+          supplierCode: supplier.supplierCode,
+        },
+        responsePayloadJson: {
+          itemCount: result.items.length,
+        },
+        requestStatus: 'SUCCESS',
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(supplier.id);
+
+      const updated = await this.syncDynamicCatalog({
+        supplierCode: supplier.supplierCode,
+        items: result.items.map((item) => ({
+          productCode: item.productCode,
+          salesStatus: item.salesStatus ?? 'ON_SALE',
+          purchasePrice: item.purchasePrice,
+          inventoryQuantity: item.inventoryQuantity,
+        })),
+      });
+
+      return {
+        supplierCode: supplier.supplierCode,
+        updatedProducts: updated.updatedProducts,
+      };
+    } catch (error) {
+      await this.repository.addRequestLog({
+        supplierId: supplier.id,
+        requestPayloadJson: {
+          action: 'SYNC_CATALOG_DYNAMIC',
+          supplierCode: supplier.supplierCode,
+        },
+        responsePayloadJson: {
+          errorMessage: error instanceof Error ? error.message : '供应商动态目录同步失败',
+        },
+        requestStatus: isTimeoutError(error) ? 'TIMEOUT' : 'PROTOCOL_FAIL',
+        durationMs: Date.now() - startedAt,
+      });
+      await this.refreshRuntimeBreakerState(supplier.id);
+      await this.repository.addProductSyncLog({
+        supplierId: supplier.id,
+        syncType: 'DYNAMIC',
+        status: 'FAIL',
+        requestPayloadJson: {
+          supplierCode: supplier.supplierCode,
+        },
+        responsePayloadJson: {},
+        errorMessage: error instanceof Error ? error.message : '供应商动态目录同步失败',
+      });
+      throw error;
+    }
+  }
+
+  private async listSyncableSuppliers(supplierCode?: string) {
+    if (supplierCode) {
+      return [await this.requireSupplierByCode(supplierCode)];
+    }
+
+    const suppliers = await this.repository.listSuppliers();
+    const syncableSuppliers = [];
+
+    for (const supplier of suppliers) {
+      const adapter = await this.getAdapter(supplier.supplierCode).catch(() => null);
+
+      if (adapter?.syncCatalog) {
+        syncableSuppliers.push(supplier);
+      }
+    }
+
+    return syncableSuppliers;
+  }
+
+  private async isSupplierBreakerOpen(supplierId: string): Promise<boolean> {
+    const breaker = await this.repository.findRuntimeBreakerBySupplierId(supplierId);
+
+    if (!breaker || breaker.breakerStatus !== 'OPEN') {
+      return false;
+    }
+
+    if (!breaker.openedAt) {
+      return true;
+    }
+
+    const expiresAt =
+      new Date(breaker.openedAt).getTime() + breaker.recoveryTimeoutSeconds * 1000;
+
+    if (expiresAt > Date.now()) {
+      return true;
+    }
+
+    await this.repository.upsertRuntimeBreaker({
+      supplierId,
+      breakerStatus: 'CLOSED',
+      failCountWindow: 0,
+      failThreshold: runtimeBreakerFailureThreshold,
+      openedAt: null,
+      lastProbeAt: new Date(),
+      recoveryTimeoutSeconds: runtimeBreakerRecoveryTimeoutSeconds,
+    });
+
+    return false;
+  }
+
+  private async refreshRuntimeBreakerState(supplierId: string): Promise<void> {
+    const recentLogs = await this.repository.listLatestRequestLogsBySupplierId(
+      supplierId,
+      10,
+    );
+    const latestStatus = recentLogs[0]?.requestStatus ?? null;
+    const breakerStatuses = recentLogs
+      .map((log) => log.requestStatus)
+      .filter((status) => ['OUT_OF_STOCK', 'MAINTENANCE', 'PROTOCOL_FAIL'].includes(status));
+    const consecutiveStatus = breakerStatuses[0] ?? null;
+    const consecutiveCount =
+      consecutiveStatus && ['OUT_OF_STOCK', 'MAINTENANCE', 'PROTOCOL_FAIL'].includes(consecutiveStatus)
+        ? breakerStatuses.findIndex((status) => status !== consecutiveStatus) === -1
+          ? breakerStatuses.length
+          : breakerStatuses.findIndex((status) => status !== consecutiveStatus)
+        : 0;
+    const shouldOpen =
+      latestStatus !== 'SUCCESS' &&
+      latestStatus !== 'QUERYING' &&
+      consecutiveStatus !== null &&
+      ['OUT_OF_STOCK', 'MAINTENANCE', 'PROTOCOL_FAIL'].includes(consecutiveStatus) &&
+      consecutiveCount >= runtimeBreakerFailureThreshold;
+
+    await this.repository.upsertRuntimeBreaker({
+      supplierId,
+      breakerStatus: shouldOpen ? 'OPEN' : 'CLOSED',
+      failCountWindow: shouldOpen ? consecutiveCount : 0,
+      failThreshold: runtimeBreakerFailureThreshold,
+      openedAt: shouldOpen ? new Date() : null,
+      lastProbeAt: new Date(),
+      recoveryTimeoutSeconds: runtimeBreakerRecoveryTimeoutSeconds,
+    });
+  }
+
   private async getPrimarySupplierCandidate(order: OrderRecord) {
     const supplierCandidates = (order.supplierRouteSnapshotJson.supplierCandidates ?? []) as Array<
       Record<string, unknown>
@@ -543,17 +979,49 @@ export class SuppliersService implements SupplierContract {
       supplierProductCode: String(candidate.supplierProductCode ?? ''),
       priority: Number(candidate.priority ?? Number.MAX_SAFE_INTEGER),
       costPrice: Number(candidate.costPrice ?? Number.MAX_SAFE_INTEGER),
-    })) as Array<{
+    }));
+    const availableCandidates: Array<{
       supplierId: string;
       supplierProductCode: string;
       priority: number;
       costPrice: number;
+      successRate: number;
+      stabilityScore: number;
+      profit: number;
+      averageDurationMs: number;
       [key: string]: unknown;
-    }>;
-    const primarySupplier = chooseSupplierCandidate(normalizedCandidates);
+    }> = [];
+    const healthRows = await this.repository.listSupplierHealthMetrics(
+      normalizedCandidates.map((candidate) => candidate.supplierId),
+    );
+    const healthMap = new Map(healthRows.map((row) => [row.supplierId, row]));
+
+    for (const candidate of normalizedCandidates) {
+      if (await this.isSupplierBreakerOpen(candidate.supplierId)) {
+        continue;
+      }
+
+      const health = healthMap.get(candidate.supplierId);
+      const totalCount = Number(health?.totalCount ?? 0);
+      const successCount = Number(health?.successCount ?? 0);
+      const timeoutCount = Number(health?.timeoutCount ?? 0);
+      const protocolFailCount = Number(health?.protocolFailCount ?? 0);
+      const successRate = totalCount > 0 ? successCount / totalCount : 1;
+      const stabilityScore =
+        totalCount > 0 ? 1 - (timeoutCount + protocolFailCount) / totalCount : 1;
+
+      availableCandidates.push({
+        ...candidate,
+        successRate,
+        stabilityScore,
+        profit: Number(order.salePrice) - Number(candidate.costPrice),
+        averageDurationMs: Number(health?.averageDurationMs ?? 999999),
+      });
+    }
+    const primarySupplier = chooseSupplierCandidate(availableCandidates);
 
     if (!primarySupplier) {
-      throw badRequest('订单缺少供应商候选映射');
+      throw badRequest('订单缺少可用供应商候选映射');
     }
 
     return primarySupplier;

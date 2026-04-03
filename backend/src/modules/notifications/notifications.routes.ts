@@ -41,7 +41,7 @@ export function createNotificationsRoutes({
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
-        return ok(requestId, await notificationsService.getTask(params.taskNo));
+        return ok(requestId, await notificationsService.getTaskDetail(params.taskNo));
       },
       {
         detail: {

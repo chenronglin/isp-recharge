@@ -35,6 +35,30 @@ export class LedgerRepository {
     return rows.map((row) => this.mapLedgerEntry(row));
   }
 
+  async findLedgerEntryById(entryId: string): Promise<LedgerEntry | null> {
+    const row = await first<LedgerEntry>(db<LedgerEntry[]>`
+      SELECT
+        id,
+        ledger_no AS "ledgerNo",
+        account_id AS "accountId",
+        order_no AS "orderNo",
+        action_type AS "actionType",
+        direction,
+        amount,
+        currency,
+        balance_before AS "balanceBefore",
+        balance_after AS "balanceAfter",
+        reference_type AS "referenceType",
+        reference_no AS "referenceNo",
+        created_at AS "createdAt"
+      FROM ledger.account_ledgers
+      WHERE id = ${entryId}
+      LIMIT 1
+    `);
+
+    return row ? this.mapLedgerEntry(row) : null;
+  }
+
   async findAccount(ownerType: string, ownerId: string): Promise<Account | null> {
     const row = await first<Account>(db<Account[]>`
       SELECT

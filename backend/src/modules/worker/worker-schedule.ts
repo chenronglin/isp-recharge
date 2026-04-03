@@ -1,36 +1,62 @@
 import type { CreateWorkerJobInput, WorkerJobType } from '@/modules/worker/worker.types';
 
-interface RecurringWorkerSchedule {
+export interface RecurringWorkerSchedule {
   jobType: WorkerJobType;
   businessKey: string;
   payload: Record<string, unknown>;
+  intervalSeconds: number;
 }
 
-// 当前只自动启动可安全执行的周期任务。
-// supplier catalog sync 仍依赖真实上游拉取入口，因此暂不做自动调度。
 export const recurringWorkerSchedules: RecurringWorkerSchedule[] = [
+  {
+    jobType: 'supplier.catalog.full-sync',
+    businessKey: 'system:supplier-catalog-full-sync',
+    payload: {},
+    intervalSeconds: 24 * 60 * 60,
+  },
+  {
+    jobType: 'supplier.catalog.delta-sync',
+    businessKey: 'system:supplier-catalog-delta-sync',
+    payload: {},
+    intervalSeconds: 60 * 60,
+  },
   {
     jobType: 'order.timeout.scan',
     businessKey: 'system:order-timeout-scan',
     payload: {},
+    intervalSeconds: 60,
   },
   {
     jobType: 'supplier.reconcile.inflight',
     businessKey: 'system:supplier-reconcile-inflight',
     payload: {},
+    intervalSeconds: 10 * 60,
   },
   {
     jobType: 'supplier.reconcile.daily',
     businessKey: 'system:supplier-reconcile-daily',
     payload: {},
+    intervalSeconds: 24 * 60 * 60,
   },
 ];
+
+const recurringWorkerScheduleMap = new Map(
+  recurringWorkerSchedules.map((schedule) => [`${schedule.jobType}:${schedule.businessKey}`, schedule]),
+);
 
 export function toScheduledJobInput(schedule: RecurringWorkerSchedule): CreateWorkerJobInput {
   return {
     jobType: schedule.jobType,
     businessKey: schedule.businessKey,
     payload: schedule.payload,
-    nextRunAt: new Date(),
+    nextRunAt: getNextRecurringRunAt(schedule, new Date()),
   };
+}
+
+export function getRecurringWorkerSchedule(jobType: string, businessKey: string) {
+  return recurringWorkerScheduleMap.get(`${jobType}:${businessKey}`) ?? null;
+}
+
+export function getNextRecurringRunAt(schedule: RecurringWorkerSchedule, now = new Date()): Date {
+  return new Date(now.getTime() + schedule.intervalSeconds * 1000);
 }

@@ -1,4 +1,4 @@
-import { badRequest } from '@/lib/errors';
+import { badRequest, notFound } from '@/lib/errors';
 import { eventBus } from '@/lib/event-bus';
 import { decryptText, signOpenApiPayload } from '@/lib/security';
 import type { NotificationsRepository } from '@/modules/notifications/notifications.repository';
@@ -43,8 +43,17 @@ export class NotificationsService {
     return this.repository.listTasks();
   }
 
-  async getTask(taskNo: string) {
-    return this.repository.findTaskByTaskNo(taskNo);
+  async getTaskDetail(taskNo: string) {
+    const task = await this.repository.findTaskByTaskNo(taskNo);
+
+    if (!task) {
+      throw notFound('通知任务不存在');
+    }
+
+    return {
+      task,
+      recentDeliveries: await this.repository.listRecentDeliveryLogsByTaskNo(taskNo),
+    };
   }
 
   async listDeadLetters() {

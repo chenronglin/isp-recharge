@@ -10,6 +10,7 @@ import type { IamService } from '@/modules/iam/iam.service';
 import {
   CreateOrderBodySchema,
   MarkExceptionBodySchema,
+  OrderAdminListQuerySchema,
   RemarkBodySchema,
 } from '@/modules/orders/orders.schema';
 import type { OrdersService } from '@/modules/orders/orders.service';
@@ -124,14 +125,22 @@ export function createOrdersRoutes({
   const adminRoutes = new Elysia({ prefix: '/admin/orders' })
     .get(
       '/',
-      async ({ request }) => {
+      async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
-        return ok(requestId, await ordersService.listOrders());
+        return ok(
+          requestId,
+          await ordersService.listOrders({
+            orderNo: query.orderNo,
+            mobile: query.mobile,
+            supplierOrderNo: query.supplierOrderNo,
+          }),
+        );
       },
       {
+        query: OrderAdminListQuerySchema,
         detail: {
           tags: ['admin'],
           summary: '查询后台订单列表',

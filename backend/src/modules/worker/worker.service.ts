@@ -7,7 +7,12 @@ import type {
   WorkerJobHandler,
   WorkerJobType,
 } from '@/modules/worker/worker.types';
-import { recurringWorkerSchedules, toScheduledJobInput } from '@/modules/worker/worker-schedule';
+import {
+  getNextRecurringRunAt,
+  getRecurringWorkerSchedule,
+  recurringWorkerSchedules,
+  toScheduledJobInput,
+} from '@/modules/worker/worker-schedule';
 
 const retryBackoffInSeconds = [1, 5, 10, 30, 60];
 
@@ -114,6 +119,16 @@ export class WorkerService implements WorkerContract {
         const duration = Date.now() - startedAt;
 
         await this.repository.addAttempt(job.id, job.attemptCount + 1, 'SUCCESS', null, duration);
+        const recurringSchedule = getRecurringWorkerSchedule(job.jobType, job.businessKey);
+
+        if (recurringSchedule) {
+          await this.repository.rescheduleRecurring(
+            job.id,
+            getNextRecurringRunAt(recurringSchedule, new Date()),
+          );
+          continue;
+        }
+
         await this.repository.markSuccess(job.id);
       } catch (error) {
         const message = error instanceof Error ? error.message : '未知任务执行错误';

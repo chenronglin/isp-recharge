@@ -11,14 +11,20 @@ import {
 } from './test-support';
 
 let runtime: Awaited<ReturnType<typeof buildApp>>;
-const migrationFile = join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql');
+const migrationFiles = [
+  join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql'),
+  join(import.meta.dir, '../src/database/migrations/0002_add_login_sessions.sql'),
+  join(import.meta.dir, '../src/database/migrations/0003_add_admin_security_logs.sql'),
+];
 const retryBackoffInMinutes = [0, 1, 5, 15, 30, 60] as const;
 const retryLowerJitterMs = 5_000;
 const retryUpperJitterMs = 20_000;
 
 beforeAll(async () => {
   await acquireIntegrationTestLock();
-  await executeFile(migrationFile);
+  for (const migrationFile of migrationFiles) {
+    await executeFile(migrationFile);
+  }
   await runSeed(db);
   runtime = await buildApp({ startWorkerScheduler: false });
 });

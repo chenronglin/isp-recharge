@@ -9,7 +9,11 @@ import { stableStringify } from '@/lib/utils';
 import { acquireIntegrationTestLock, releaseIntegrationTestLock } from './test-support';
 
 let runtime: Awaited<ReturnType<typeof buildApp>>;
-const migrationFile = join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql');
+const migrationFiles = [
+  join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql'),
+  join(import.meta.dir, '../src/database/migrations/0002_add_login_sessions.sql'),
+  join(import.meta.dir, '../src/database/migrations/0003_add_admin_security_logs.sql'),
+];
 
 function buildSignedHeaders(input: {
   path: string;
@@ -69,7 +73,9 @@ async function rebuildManagedSchemas() {
     DROP TABLE IF EXISTS public.app_migrations;
   `);
 
-  await executeFile(migrationFile);
+  for (const migrationFile of migrationFiles) {
+    await executeFile(migrationFile);
+  }
 }
 
 async function resetTestState() {

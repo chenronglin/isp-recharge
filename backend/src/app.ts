@@ -83,18 +83,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   // 统一注册 Worker 处理器。
-  workerModule.service.registerHandler('supplier.catalog.full-sync', async (payload) => {
-    await suppliersModule.service.syncFullCatalog({
-      supplierCode: String(payload.supplierCode ?? ''),
-      items: Array.isArray(payload.items) ? (payload.items as any[]) : [],
-    });
-  });
-  workerModule.service.registerHandler('supplier.catalog.delta-sync', async (payload) => {
-    await suppliersModule.service.syncDynamicCatalog({
-      supplierCode: String(payload.supplierCode ?? ''),
-      items: Array.isArray(payload.items) ? (payload.items as any[]) : [],
-    });
-  });
+  workerModule.service.registerHandler('supplier.catalog.full-sync', (payload) =>
+    suppliersModule.service.handleCatalogFullSyncJob(payload),
+  );
+  workerModule.service.registerHandler('supplier.catalog.delta-sync', (payload) =>
+    suppliersModule.service.handleCatalogDeltaSyncJob(payload),
+  );
   workerModule.service.registerHandler('supplier.submit', (payload) =>
     suppliersModule.service.submitOrder({
       orderNo: String(payload.orderNo ?? ''),
@@ -121,6 +115,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
     await ordersModule.service.scanTimeouts(scanNow);
   });
+  workerModule.service.registerHandler('order.refund.retry', (payload) =>
+    ordersModule.service.handleRefundRetryJob(payload),
+  );
   workerModule.service.registerHandler('notification.deliver', (payload) =>
     notificationsModule.service.handleDeliverJob(payload),
   );

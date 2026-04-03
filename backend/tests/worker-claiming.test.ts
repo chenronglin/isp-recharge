@@ -10,7 +10,11 @@ import {
   resetTestState,
 } from './test-support';
 
-const migrationFile = join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql');
+const migrationFiles = [
+  join(import.meta.dir, '../src/database/migrations/0001_init_schemas.sql'),
+  join(import.meta.dir, '../src/database/migrations/0002_add_login_sessions.sql'),
+  join(import.meta.dir, '../src/database/migrations/0003_add_admin_security_logs.sql'),
+];
 
 async function rebuildManagedSchemas() {
   await db.unsafe(`
@@ -26,7 +30,9 @@ async function rebuildManagedSchemas() {
     DROP TABLE IF EXISTS public.app_migrations;
   `);
 
-  await executeFile(migrationFile);
+  for (const migrationFile of migrationFiles) {
+    await executeFile(migrationFile);
+  }
 }
 
 beforeAll(async () => {

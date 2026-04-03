@@ -102,3 +102,9 @@ export interface OpenOrderEventRecord {
   afterStatusJson: Record<string, unknown>;
   occurredAt: string;
 }
+
+export interface OrderListFilters {
+  orderNo?: string;
+  mobile?: string;
+  supplierOrderNo?: string;
+}

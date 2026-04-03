@@ -235,6 +235,19 @@ export class WorkerRepository {
     `;
   }
 
+  async rescheduleRecurring(jobId: string, nextRunAt: Date): Promise<void> {
+    await db`
+      UPDATE worker.worker_jobs
+      SET
+        status = 'READY',
+        attempt_count = 0,
+        next_run_at = ${nextRunAt},
+        last_error = NULL,
+        updated_at = NOW()
+      WHERE id = ${jobId}
+    `;
+  }
+
   async rescheduleActive(input: {
     jobId: string;
     payload: Record<string, unknown>;

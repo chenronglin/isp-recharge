@@ -15,3 +15,9 @@ export const RemarkBodySchema = t.Object({
 export const MarkExceptionBodySchema = t.Object({
   exceptionTag: t.String({ minLength: 1 }),
 });
+
+export const OrderAdminListQuerySchema = t.Object({
+  orderNo: t.Optional(t.String({ minLength: 1 })),
+  mobile: t.Optional(t.String({ pattern: '^\\d{11}$' })),
+  supplierOrderNo: t.Optional(t.String({ minLength: 1 })),
+});

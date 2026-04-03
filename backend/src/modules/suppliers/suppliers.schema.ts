@@ -17,6 +17,21 @@ export const SupplierQueryBodySchema = t.Object({
   supplierOrderNo: t.String(),
 });
 
+export const SupplierCatalogFullSyncBodySchema = t.Object({
+  supplierCode: t.Optional(t.String()),
+  items: t.Optional(t.Array(t.Any())),
+});
+
+export const SupplierCatalogDeltaSyncBodySchema = t.Object({
+  supplierCode: t.Optional(t.String()),
+  items: t.Optional(t.Array(t.Any())),
+});
+
+export const SupplierReconcileBodySchema = t.Object({
+  reconcileDate: t.Optional(t.String()),
+  onlyInflight: t.Optional(t.Boolean()),
+});
+
 export const SupplierCallbackBodySchema = t.Object({
   supplierOrderNo: t.String(),
   status: t.Union([t.Literal('SUCCESS'), t.Literal('FAIL')]),

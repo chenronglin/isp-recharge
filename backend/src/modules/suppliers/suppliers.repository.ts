@@ -11,6 +11,8 @@ import type {
   SupplierOrder,
   SupplierReconcileCandidate,
   SupplierReconcileDiff,
+  SupplierRequestLog,
+  SupplierRuntimeBreaker,
   SupplierSyncLog,
 } from '@/modules/suppliers/suppliers.types';
 
@@ -36,6 +38,15 @@ interface ReconcileCandidateRow {
   purchasePrice: string | number;
   orderCreatedAt: string;
   orderUpdatedAt: string;
+}
+
+interface SupplierHealthMetrics {
+  supplierId: string;
+  totalCount: number;
+  successCount: number;
+  timeoutCount: number;
+  protocolFailCount: number;
+  averageDurationMs: number;
 }
 
 export class SuppliersRepository {
@@ -67,6 +78,23 @@ export class SuppliersRepository {
       ...row,
       requestPayloadJson: parseJsonValue(row.requestPayloadJson, {}),
       responsePayloadJson: parseJsonValue(row.responsePayloadJson, {}),
+    };
+  }
+
+  private mapRequestLog(row: SupplierRequestLog): SupplierRequestLog {
+    return {
+      ...row,
+      requestPayloadJson: parseJsonValue(row.requestPayloadJson, {}),
+      responsePayloadJson: parseJsonValue(row.responsePayloadJson, {}),
+    };
+  }
+
+  private mapRuntimeBreaker(row: SupplierRuntimeBreaker): SupplierRuntimeBreaker {
+    return {
+      ...row,
+      failCountWindow: Number(row.failCountWindow),
+      failThreshold: Number(row.failThreshold),
+      recoveryTimeoutSeconds: Number(row.recoveryTimeoutSeconds),
     };
   }
 
@@ -494,6 +522,206 @@ export class SuppliersRepository {
         NOW()
       )
     `;
+  }
+
+  async addRequestLog(input: {
+    supplierId: string;
+    orderNo?: string | null;
+    supplierProductCode?: string | null;
+    requestPayloadJson: Record<string, unknown>;
+    responsePayloadJson: Record<string, unknown>;
+    requestStatus: string;
+    attemptNo?: number;
+    durationMs: number;
+  }): Promise<SupplierRequestLog> {
+    const rows = await db<SupplierRequestLog[]>`
+      INSERT INTO supplier.supplier_request_logs (
+        id,
+        supplier_id,
+        order_no,
+        supplier_product_code,
+        request_payload_json,
+        response_payload_json,
+        request_status,
+        attempt_no,
+        duration_ms,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${generateId()},
+        ${input.supplierId},
+        ${input.orderNo ?? null},
+        ${input.supplierProductCode ?? null},
+        ${JSON.stringify(input.requestPayloadJson)},
+        ${JSON.stringify(input.responsePayloadJson)},
+        ${input.requestStatus},
+        ${input.attemptNo ?? 1},
+        ${input.durationMs},
+        NOW(),
+        NOW()
+      )
+      RETURNING
+        id,
+        supplier_id AS "supplierId",
+        order_no AS "orderNo",
+        supplier_product_code AS "supplierProductCode",
+        request_payload_json AS "requestPayloadJson",
+        response_payload_json AS "responsePayloadJson",
+        request_status AS "requestStatus",
+        attempt_no AS "attemptNo",
+        duration_ms AS "durationMs",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+    `;
+
+    const log = rows[0];
+
+    if (!log) {
+      throw new Error('记录供应商请求日志失败');
+    }
+
+    return this.mapRequestLog(log);
+  }
+
+  async listLatestRequestLogsBySupplierId(
+    supplierId: string,
+    limit = 10,
+  ): Promise<SupplierRequestLog[]> {
+    const rows = await db<SupplierRequestLog[]>`
+      SELECT
+        id,
+        supplier_id AS "supplierId",
+        order_no AS "orderNo",
+        supplier_product_code AS "supplierProductCode",
+        request_payload_json AS "requestPayloadJson",
+        response_payload_json AS "responsePayloadJson",
+        request_status AS "requestStatus",
+        attempt_no AS "attemptNo",
+        duration_ms AS "durationMs",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM supplier.supplier_request_logs
+      WHERE supplier_id = ${supplierId}
+        AND created_at >= NOW() - INTERVAL '10 minutes'
+      ORDER BY created_at DESC, id DESC
+      LIMIT ${limit}
+    `;
+
+    return rows.map((row) => this.mapRequestLog(row));
+  }
+
+  async listSupplierHealthMetrics(supplierIds: string[]): Promise<SupplierHealthMetrics[]> {
+    if (supplierIds.length === 0) {
+      return [];
+    }
+
+    const placeholders = supplierIds.map((_, index) => `$${index + 1}`).join(', ');
+
+    return db.unsafe<SupplierHealthMetrics[]>(
+      `
+        SELECT
+          supplier_id AS "supplierId",
+          COUNT(*)::int AS "totalCount",
+          COUNT(*) FILTER (WHERE request_status = 'SUCCESS')::int AS "successCount",
+          COUNT(*) FILTER (WHERE request_status = 'TIMEOUT')::int AS "timeoutCount",
+          COUNT(*) FILTER (
+            WHERE request_status IN ('PROTOCOL_FAIL', 'OUT_OF_STOCK', 'MAINTENANCE')
+          )::int AS "protocolFailCount",
+          COALESCE(AVG(duration_ms), 999999)::float AS "averageDurationMs"
+        FROM supplier.supplier_request_logs
+        WHERE supplier_id IN (${placeholders})
+          AND created_at >= NOW() - INTERVAL '24 hours'
+        GROUP BY supplier_id
+      `,
+      supplierIds,
+    );
+  }
+
+  async findRuntimeBreakerBySupplierId(supplierId: string): Promise<SupplierRuntimeBreaker | null> {
+    const row = await first<SupplierRuntimeBreaker>(db<SupplierRuntimeBreaker[]>`
+      SELECT
+        id,
+        supplier_id AS "supplierId",
+        breaker_status AS "breakerStatus",
+        fail_count_window AS "failCountWindow",
+        fail_threshold AS "failThreshold",
+        opened_at AS "openedAt",
+        last_probe_at AS "lastProbeAt",
+        recovery_timeout_seconds AS "recoveryTimeoutSeconds",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM supplier.supplier_runtime_breakers
+      WHERE supplier_id = ${supplierId}
+      LIMIT 1
+    `);
+
+    return row ? this.mapRuntimeBreaker(row) : null;
+  }
+
+  async upsertRuntimeBreaker(input: {
+    supplierId: string;
+    breakerStatus: string;
+    failCountWindow: number;
+    failThreshold: number;
+    openedAt?: Date | null;
+    lastProbeAt?: Date | null;
+    recoveryTimeoutSeconds: number;
+  }): Promise<SupplierRuntimeBreaker> {
+    const rows = await db<SupplierRuntimeBreaker[]>`
+      INSERT INTO supplier.supplier_runtime_breakers (
+        id,
+        supplier_id,
+        breaker_status,
+        fail_count_window,
+        fail_threshold,
+        opened_at,
+        last_probe_at,
+        recovery_timeout_seconds,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${generateId()},
+        ${input.supplierId},
+        ${input.breakerStatus},
+        ${input.failCountWindow},
+        ${input.failThreshold},
+        ${input.openedAt ?? null},
+        ${input.lastProbeAt ?? null},
+        ${input.recoveryTimeoutSeconds},
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (supplier_id) DO UPDATE
+      SET
+        breaker_status = EXCLUDED.breaker_status,
+        fail_count_window = EXCLUDED.fail_count_window,
+        fail_threshold = EXCLUDED.fail_threshold,
+        opened_at = EXCLUDED.opened_at,
+        last_probe_at = EXCLUDED.last_probe_at,
+        recovery_timeout_seconds = EXCLUDED.recovery_timeout_seconds,
+        updated_at = NOW()
+      RETURNING
+        id,
+        supplier_id AS "supplierId",
+        breaker_status AS "breakerStatus",
+        fail_count_window AS "failCountWindow",
+        fail_threshold AS "failThreshold",
+        opened_at AS "openedAt",
+        last_probe_at AS "lastProbeAt",
+        recovery_timeout_seconds AS "recoveryTimeoutSeconds",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+    `;
+
+    const breaker = rows[0];
+
+    if (!breaker) {
+      throw new Error('更新供应商熔断状态失败');
+    }
+
+    return this.mapRuntimeBreaker(breaker);
   }
 
   async listReconcileCandidates(input: {

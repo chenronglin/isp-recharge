@@ -63,6 +63,33 @@ export interface SupplierSyncLog {
   syncedAt: string;
 }
 
+export interface SupplierRequestLog {
+  id: string;
+  supplierId: string;
+  orderNo: string | null;
+  supplierProductCode: string | null;
+  requestPayloadJson: Record<string, unknown>;
+  responsePayloadJson: Record<string, unknown>;
+  requestStatus: string;
+  attemptNo: number;
+  durationMs: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SupplierRuntimeBreaker {
+  id: string;
+  supplierId: string;
+  breakerStatus: string;
+  failCountWindow: number;
+  failThreshold: number;
+  openedAt: string | null;
+  lastProbeAt: string | null;
+  recoveryTimeoutSeconds: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SupplierReconcileCandidate {
   orderNo: string;
   supplierId: string;

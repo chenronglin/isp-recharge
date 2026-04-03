@@ -76,6 +76,7 @@ export async function resetTestState() {
       risk.risk_black_white_list,
       risk.risk_rules,
       supplier.supplier_reconcile_diffs,
+      supplier.supplier_runtime_breakers,
       supplier.supplier_callback_logs,
       supplier.supplier_request_logs,
       supplier.supplier_orders,

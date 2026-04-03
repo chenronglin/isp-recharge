@@ -5,6 +5,7 @@ import { ordersSql } from '@/modules/orders/orders.sql';
 import type {
   MainOrderStatus,
   OrderEventRecord,
+  OrderListFilters,
   OrderMonitorStatus,
   OrderNotifyStatus,
   OrderRecord,
@@ -82,8 +83,58 @@ export class OrdersRepository {
       : 'NORMAL';
   }
 
-  async listOrders(): Promise<OrderRecord[]> {
-    const rows = await db.unsafe<OrderRecord[]>(ordersSql.listOrders);
+  async listOrders(filters: OrderListFilters = {}): Promise<OrderRecord[]> {
+    const rows = await db<OrderRecord[]>`
+      SELECT
+        id,
+        order_no AS "orderNo",
+        channel_order_no AS "channelOrderNo",
+        channel_id AS "channelId",
+        parent_channel_id AS "parentChannelId",
+        mobile_number AS "mobile",
+        province_name AS "province",
+        isp_code AS "ispName",
+        face_value AS "faceValue",
+        product_id AS "matchedProductId",
+        sale_price AS "salePrice",
+        cost_price AS "purchasePrice",
+        currency,
+        main_status AS "mainStatus",
+        payment_status AS "paymentStatus",
+        supplier_status AS "supplierStatus",
+        notify_status AS "notifyStatus",
+        requested_product_type AS "requestedProductType",
+        refund_status AS "refundStatus",
+        monitor_status AS "monitorStatus",
+        channel_snapshot_json AS "channelSnapshotJson",
+        product_snapshot_json AS "productSnapshotJson",
+        callback_snapshot_json AS "callbackSnapshotJson",
+        supplier_route_snapshot_json AS "supplierRouteSnapshotJson",
+        risk_snapshot_json AS "riskSnapshotJson",
+        ext_json AS "extJson",
+        exception_tag AS "exceptionTag",
+        remark,
+        version,
+        request_id AS "requestId",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt",
+        warning_deadline_at AS "warningDeadlineAt",
+        expire_deadline_at AS "expireDeadlineAt",
+        finished_at AS "finishedAt"
+      FROM ordering.orders AS orders
+      WHERE (${filters.orderNo ?? null}::TEXT IS NULL OR orders.order_no = ${filters.orderNo ?? null})
+        AND (${filters.mobile ?? null}::TEXT IS NULL OR orders.mobile_number = ${filters.mobile ?? null})
+        AND (
+          ${filters.supplierOrderNo ?? null}::TEXT IS NULL
+          OR EXISTS (
+            SELECT 1
+            FROM supplier.supplier_orders AS supplier_orders
+            WHERE supplier_orders.order_no = orders.order_no
+              AND supplier_orders.supplier_order_no = ${filters.supplierOrderNo ?? null}
+          )
+        )
+      ORDER BY orders.created_at DESC
+    `;
     return rows.map((row) => this.mapOrder(row));
   }
 
