@@ -2,8 +2,8 @@
 
 ## 模块职责
 
-- 管理渠道主体、API Key、商品授权、渠道价格、限额和回调配置。
-- 提供开放接口签名校验与下单前策略查询。
+- 管理单层渠道主体、API Key、商品授权、渠道价格、限额和回调配置。
+- 提供开放接口签名校验、渠道档案查询、额度查询与下单前策略查询。
 
 ## 核心表
 
@@ -18,13 +18,16 @@
 
 - `GET /admin/channels`
 - `POST /admin/channels`
+- `GET /admin/channel-api-keys`
 - `POST /admin/channel-api-keys`
 - `POST /admin/channel-products`
 - `POST /admin/channel-prices`
 - `POST /admin/channel-limits`
 - `POST /admin/channel-callback-configs`
 - `GET /open-api/channel/profile`
+- `GET /open-api/channel/quota`
 - `GET /internal/channels/:channelId/order-policy`
+- `GET /internal/channels/:channelId/callback-config`
 
 ## 关键规则
 

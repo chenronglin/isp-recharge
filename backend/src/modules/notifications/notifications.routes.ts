@@ -1,7 +1,9 @@
 import { Elysia } from 'elysia';
+import { requireAnyAdminRole } from '@/lib/admin-roles';
+import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader } from '@/lib/auth';
 import { ok } from '@/lib/http';
-import { getRequestIdFromRequest } from '@/lib/route-meta';
+import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
 import type { NotificationsService } from '@/modules/notifications/notifications.service';
 
@@ -20,7 +22,8 @@ export function createNotificationsRoutes({
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
         return ok(requestId, await notificationsService.listTasks());
       },
       {
@@ -36,7 +39,8 @@ export function createNotificationsRoutes({
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
         return ok(requestId, await notificationsService.getTask(params.taskNo));
       },
       {
@@ -51,9 +55,25 @@ export function createNotificationsRoutes({
       '/tasks/:taskNo/retry',
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS', 'SUPPORT']);
         await notificationsService.retryTask(params.taskNo);
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'RETRY_NOTIFICATION_TASK',
+          resourceType: 'NOTIFICATION_TASK',
+          resourceId: params.taskNo,
+          details: {
+            taskNo: params.taskNo,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -69,7 +89,8 @@ export function createNotificationsRoutes({
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
         return ok(requestId, await notificationsService.listDeadLetters());
       },
       {

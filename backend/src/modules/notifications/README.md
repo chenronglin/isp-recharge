@@ -2,13 +2,12 @@
 
 ## 模块职责
 
-- V1 仅处理订单终态 Webhook 通知任务。
+- 仅处理订单终态 Webhook 通知任务。
 - 负责签名、投递、重试、死信与投递日志。
 
 ## 核心表
 
 - `notification.notification_tasks`
-- `notification.notification_templates`
 - `notification.notification_delivery_logs`
 - `notification.notification_dead_letters`
 
@@ -16,6 +15,7 @@
 
 - `GET /admin/notifications/tasks`
 - `GET /admin/notifications/tasks/:taskNo`
+- `GET /admin/notifications/tasks/:taskNo/delivery-logs`
 - `POST /admin/notifications/tasks/:taskNo/retry`
 - `GET /admin/notifications/dead-letters`
 

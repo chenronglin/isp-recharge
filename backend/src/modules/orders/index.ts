@@ -1,3 +1,4 @@
+import { writeAuditLog } from '@/lib/audit';
 import type { ChannelsService } from '@/modules/channels/channels.service';
 import type { ChannelContract } from '@/modules/channels/contracts';
 import type { IamService } from '@/modules/iam/iam.service';
@@ -42,6 +43,7 @@ export function createOrdersModule(input: {
       ordersService: service,
       channelsService: input.channelsService,
       iamService: input.iamService,
+      auditLogger: writeAuditLog,
     }),
   };
 }

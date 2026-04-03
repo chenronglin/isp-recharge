@@ -1,4 +1,6 @@
 import { Elysia } from 'elysia';
+import type { AuditInput } from '@/lib/audit';
+import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { ok } from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
@@ -16,12 +18,14 @@ interface OrdersRoutesDeps {
   ordersService: OrdersService;
   channelsService: ChannelsService;
   iamService: IamService;
+  auditLogger?: (input: AuditInput) => Promise<void>;
 }
 
 export function createOrdersRoutes({
   ordersService,
   channelsService,
   iamService,
+  auditLogger = async () => {},
 }: OrdersRoutesDeps) {
   const openRoutes = new Elysia({ prefix: '/open-api/orders' })
     .post(
@@ -123,7 +127,8 @@ export function createOrdersRoutes({
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
         return ok(requestId, await ordersService.listOrders());
       },
       {
@@ -139,7 +144,8 @@ export function createOrdersRoutes({
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
         return ok(requestId, await ordersService.getOrderByNo(params.orderNo));
       },
       {
@@ -155,7 +161,8 @@ export function createOrdersRoutes({
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
         return ok(requestId, await ordersService.listEvents(params.orderNo));
       },
       {
@@ -170,9 +177,25 @@ export function createOrdersRoutes({
       '/:orderNo/close',
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         await ordersService.closeOrder(params.orderNo, requestId);
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'CLOSE_ORDER',
+          resourceType: 'ORDER',
+          resourceId: params.orderNo,
+          details: {
+            orderNo: params.orderNo,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -187,9 +210,26 @@ export function createOrdersRoutes({
       '/:orderNo/mark-exception',
       async ({ params, body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         await ordersService.markException(params.orderNo, body.exceptionTag, requestId);
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'MARK_ORDER_EXCEPTION',
+          resourceType: 'ORDER',
+          resourceId: params.orderNo,
+          details: {
+            orderNo: params.orderNo,
+            exceptionTag: body.exceptionTag,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -205,9 +245,26 @@ export function createOrdersRoutes({
       '/:orderNo/remarks',
       async ({ params, body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
         await ordersService.addRemark(params.orderNo, body.remark, admin.userId);
+
+        await auditLogger({
+          operatorUserId: admin.userId,
+          operatorUsername: admin.username,
+          action: 'ADD_ORDER_REMARK',
+          resourceType: 'ORDER',
+          resourceId: params.orderNo,
+          details: {
+            orderNo: params.orderNo,
+            remark: body.remark,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -223,9 +280,25 @@ export function createOrdersRoutes({
       '/:orderNo/retry-notify',
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS', 'SUPPORT']);
         await ordersService.retryNotification(params.orderNo);
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'RETRY_ORDER_NOTIFICATION',
+          resourceType: 'ORDER',
+          resourceId: params.orderNo,
+          details: {
+            orderNo: params.orderNo,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {

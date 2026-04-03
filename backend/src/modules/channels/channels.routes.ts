@@ -1,4 +1,5 @@
 import { Elysia } from 'elysia';
+import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { ok } from '@/lib/http';
@@ -45,7 +46,8 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
-        await iamService.requireActiveAdmin(tokenPayload.sub);
+        const admin = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
         return ok(requestId, await channelsService.listChannels());
       },
       {
@@ -65,6 +67,7 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
           request.headers.get('authorization'),
         );
         const operator = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         const channel = await channelsService.createChannel(body);
 
         await writeAuditLog({
@@ -96,7 +99,8 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
-        await iamService.requireActiveAdmin(tokenPayload.sub);
+        const admin = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
         return ok(requestId, await channelsService.listCredentials());
       },
       {
@@ -116,6 +120,7 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
           request.headers.get('authorization'),
         );
         const operator = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         await channelsService.createCredential(body);
 
         await writeAuditLog({
@@ -146,11 +151,25 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
       '/admin/channel-products',
       async ({ body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
-        await iamService.requireActiveAdmin(tokenPayload.sub);
+        const operator = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         await channelsService.addAuthorization(body);
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'UPSERT_CHANNEL_PRODUCT_AUTHORIZATION',
+          resourceType: 'CHANNEL_PRODUCT_AUTHORIZATION',
+          resourceId: body.channelId,
+          details: body,
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -166,11 +185,25 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
       '/admin/channel-prices',
       async ({ body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
-        await iamService.requireActiveAdmin(tokenPayload.sub);
+        const operator = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         await channelsService.upsertPricePolicy(body);
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'UPSERT_CHANNEL_PRICE_POLICY',
+          resourceType: 'CHANNEL_PRICE_POLICY',
+          resourceId: body.channelId,
+          details: body,
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -186,11 +219,25 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
       '/admin/channel-limits',
       async ({ body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
-        await iamService.requireActiveAdmin(tokenPayload.sub);
+        const operator = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         await channelsService.upsertLimitRule(body);
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'UPSERT_CHANNEL_LIMIT_RULE',
+          resourceType: 'CHANNEL_LIMIT_RULE',
+          resourceId: body.channelId,
+          details: body,
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -206,14 +253,31 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
       '/admin/channel-callback-configs',
       async ({ body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
-        await iamService.requireActiveAdmin(tokenPayload.sub);
+        const operator = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         await channelsService.upsertCallbackConfig({
           ...body,
           timeoutSeconds: body.timeoutSeconds ?? 5,
         });
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'UPSERT_CHANNEL_CALLBACK_CONFIG',
+          resourceType: 'CHANNEL_CALLBACK_CONFIG',
+          resourceId: body.channelId,
+          details: {
+            ...body,
+            timeoutSeconds: body.timeoutSeconds ?? 5,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {

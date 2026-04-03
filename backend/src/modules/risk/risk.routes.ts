@@ -1,7 +1,9 @@
 import { Elysia } from 'elysia';
+import { requireAnyAdminRole } from '@/lib/admin-roles';
+import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { ok } from '@/lib/http';
-import { getRequestIdFromRequest } from '@/lib/route-meta';
+import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
 import {
   CreateBlackWhiteEntryBodySchema,
@@ -22,7 +24,8 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['RISK']);
         return ok(requestId, await riskService.listRules());
       },
       {
@@ -37,9 +40,24 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
       '/rules',
       async ({ body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
-        return ok(requestId, await riskService.createRule(body));
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['RISK']);
+        const rule = await riskService.createRule(body);
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'CREATE_RISK_RULE',
+          resourceType: 'RISK_RULE',
+          resourceId: rule.id,
+          details: body,
+          requestId,
+          ip: clientIp,
+        });
+
+        return ok(requestId, rule);
       },
       {
         body: CreateRiskRuleBodySchema,
@@ -55,7 +73,8 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['RISK']);
         return ok(requestId, await riskService.listBlackWhiteEntries());
       },
       {
@@ -70,9 +89,24 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
       '/black-white-lists',
       async ({ body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
-        return ok(requestId, await riskService.createBlackWhiteEntry(body));
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['RISK']);
+        const entry = await riskService.createBlackWhiteEntry(body);
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'UPSERT_RISK_BLACK_WHITE_ENTRY',
+          resourceType: 'RISK_BLACK_WHITE_ENTRY',
+          resourceId: entry?.id ?? null,
+          details: body,
+          requestId,
+          ip: clientIp,
+        });
+
+        return ok(requestId, entry);
       },
       {
         body: CreateBlackWhiteEntryBodySchema,
@@ -88,7 +122,8 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['RISK']);
         return ok(requestId, await riskService.listDecisions());
       },
       {

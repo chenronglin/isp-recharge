@@ -145,6 +145,10 @@ function sqlLiteral(value: string | number): string {
 const seedIds = {
   adminUser: 'seed-admin-user',
   superAdminRole: 'seed-role-super-admin',
+  opsRole: 'seed-role-ops',
+  financeRole: 'seed-role-finance',
+  riskRole: 'seed-role-risk',
+  supportRole: 'seed-role-support',
   demoChannel: 'seed-channel-demo',
   demoCredential: 'seed-channel-credential-demo',
   demoCallback: 'seed-channel-callback-demo',
@@ -354,17 +358,20 @@ export async function runSeed(db: SQL): Promise<void> {
         password_hash = EXCLUDED.password_hash,
         display_name = EXCLUDED.display_name,
         status = EXCLUDED.status,
+        failed_login_attempts = 0,
+        locked_until = NULL,
+        last_login_at = NULL,
         updated_at = NOW()
     `;
 
     await tx`
       INSERT INTO iam.roles (id, role_code, role_name, status)
-      VALUES (
-        ${seedIds.superAdminRole},
-        'SUPER_ADMIN',
-        '超级管理员',
-        'ACTIVE'
-      )
+      VALUES
+        (${seedIds.superAdminRole}, 'SUPER_ADMIN', '超级管理员', 'ACTIVE'),
+        (${seedIds.opsRole}, 'OPS', '平台运营', 'ACTIVE'),
+        (${seedIds.financeRole}, 'FINANCE', '平台财务', 'ACTIVE'),
+        (${seedIds.riskRole}, 'RISK', '风控专员', 'ACTIVE'),
+        (${seedIds.supportRole}, 'SUPPORT', '技术支持', 'ACTIVE')
       ON CONFLICT (role_code) DO UPDATE
       SET
         role_name = EXCLUDED.role_name,

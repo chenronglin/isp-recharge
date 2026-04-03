@@ -10,6 +10,8 @@ export const iamSql = {
       mobile,
       email,
       last_login_at AS "lastLoginAt",
+      failed_login_attempts AS "failedLoginAttempts",
+      locked_until AS "lockedUntil",
       created_at AS "createdAt",
       updated_at AS "updatedAt"
     FROM iam.admin_users

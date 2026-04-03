@@ -1,3 +1,4 @@
+import { writeAuditLog } from '@/lib/audit';
 import type { IamService } from '@/modules/iam/iam.service';
 import type { OrderContract } from '@/modules/orders/contracts';
 import { SuppliersRepository } from '@/modules/suppliers/suppliers.repository';
@@ -23,6 +24,7 @@ export function createSuppliersModule(input: {
     routes: createSuppliersRoutes({
       suppliersService: service,
       iamService: input.iamService,
+      auditLogger: writeAuditLog,
     }),
   };
 }

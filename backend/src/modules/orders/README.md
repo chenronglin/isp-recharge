@@ -3,7 +3,7 @@
 ## 模块职责
 
 - 负责创建订单、维护状态机、记录事件、输出查询与轨迹能力。
-- 统一接收支付、供应商、退款、通知等标准事件。
+- 统一接收供应商、退款、通知等标准事件。
 
 ## 核心表
 
@@ -17,8 +17,12 @@
 - `GET /open-api/orders/:orderNo`
 - `GET /open-api/orders/:orderNo/events`
 - `GET /admin/orders`
+- `GET /admin/orders/:orderNo`
+- `GET /admin/orders/:orderNo/events`
 - `POST /admin/orders/:orderNo/close`
 - `POST /admin/orders/:orderNo/mark-exception`
+- `POST /admin/orders/:orderNo/remarks`
+- `POST /admin/orders/:orderNo/retry-notify`
 
 ## 关键规则
 

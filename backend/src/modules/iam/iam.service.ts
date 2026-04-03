@@ -8,23 +8,78 @@ import type { IamContract } from '@/modules/iam/contracts';
 import type { IamRepository } from '@/modules/iam/iam.repository';
 import type { AdminContext, LoginResult } from '@/modules/iam/iam.types';
 
+const loginFailureLockThreshold = 5;
+const loginFailureLockMinutes = 15;
+
 export class IamService implements IamContract {
   constructor(private readonly repository: IamRepository) {}
 
-  async login(username: string, password: string): Promise<LoginResult> {
-    const user = await this.repository.findUserByUsername(username);
+  async login(input: {
+    username: string;
+    password: string;
+    ip: string;
+    deviceSummary: string;
+  }): Promise<LoginResult> {
+    const user = await this.repository.findUserByUsername(input.username);
 
     if (!user) {
+      await this.repository.recordLoginAttempt({
+        userId: null,
+        username: input.username,
+        ip: input.ip,
+        deviceSummary: input.deviceSummary,
+        result: 'FAIL',
+        failureReason: 'USER_NOT_FOUND',
+      });
       throw unauthorized('用户名或密码错误');
     }
 
+    if (user.lockedUntil && new Date(user.lockedUntil).getTime() > Date.now()) {
+      await this.repository.recordLoginAttempt({
+        userId: user.id,
+        username: user.username,
+        ip: input.ip,
+        deviceSummary: input.deviceSummary,
+        result: 'FAIL',
+        failureReason: 'ACCOUNT_LOCKED',
+      });
+      throw forbidden('账号已被临时锁定');
+    }
+
     if (user.status !== 'ACTIVE') {
+      await this.repository.recordLoginAttempt({
+        userId: user.id,
+        username: user.username,
+        ip: input.ip,
+        deviceSummary: input.deviceSummary,
+        result: 'FAIL',
+        failureReason: 'ACCOUNT_DISABLED',
+      });
       throw forbidden('账号已被禁用或锁定');
     }
 
-    const passwordValid = await verifyPassword(password, user.passwordHash);
+    const passwordValid = await verifyPassword(input.password, user.passwordHash);
 
     if (!passwordValid) {
+      const failureState = await this.repository.recordFailedPasswordAttempt(
+        user.id,
+        loginFailureLockThreshold,
+        loginFailureLockMinutes,
+      );
+      await this.repository.recordLoginAttempt({
+        userId: user.id,
+        username: user.username,
+        ip: input.ip,
+        deviceSummary: input.deviceSummary,
+        result: 'FAIL',
+        failureReason:
+          failureState.lockedUntil && new Date(failureState.lockedUntil).getTime() > Date.now()
+            ? 'ACCOUNT_LOCKED'
+            : 'PASSWORD_INVALID',
+      });
+      if (failureState.lockedUntil && new Date(failureState.lockedUntil).getTime() > Date.now()) {
+        throw forbidden('账号已被临时锁定');
+      }
       throw unauthorized('用户名或密码错误');
     }
 
@@ -45,6 +100,14 @@ export class IamService implements IamContract {
 
     await this.repository.createSession(user.id, hashToken(refreshToken), addDays(new Date(), 7));
     await this.repository.updateLastLoginAt(user.id);
+    await this.repository.recordLoginAttempt({
+      userId: user.id,
+      username: user.username,
+      ip: input.ip,
+      deviceSummary: input.deviceSummary,
+      result: 'SUCCESS',
+      failureReason: null,
+    });
 
     return {
       accessToken,
@@ -139,6 +202,14 @@ export class IamService implements IamContract {
     return this.repository.listUsers(page, pageSize);
   }
 
+  async listAuditLogs(page: number, pageSize: number) {
+    return this.repository.listAuditLogs(page, pageSize);
+  }
+
+  async listLoginLogs(page: number, pageSize: number) {
+    return this.repository.listLoginLogs(page, pageSize);
+  }
+
   async listRoles() {
     return this.repository.listRoles();
   }
@@ -191,5 +262,21 @@ export class IamService implements IamContract {
     }
 
     await this.repository.assignRole(userId, role.id);
+  }
+
+  async updateUserStatus(userId: string, status: 'ACTIVE' | 'DISABLED') {
+    const user = await this.repository.findUserById(userId);
+
+    if (!user) {
+      throw badRequest('用户不存在');
+    }
+
+    const updated = await this.repository.updateUserStatus(userId, status);
+
+    if (!updated) {
+      throw badRequest('更新用户状态失败');
+    }
+
+    return updated;
   }
 }

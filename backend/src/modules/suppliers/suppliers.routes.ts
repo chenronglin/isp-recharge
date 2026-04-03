@@ -1,8 +1,10 @@
 import { Elysia } from 'elysia';
+import type { AuditInput } from '@/lib/audit';
+import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { badRequest } from '@/lib/errors';
 import { ok } from '@/lib/http';
-import { getRequestIdFromRequest } from '@/lib/route-meta';
+import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
 import {
   CreateSupplierConfigBodySchema,
@@ -14,6 +16,7 @@ import type { SuppliersService } from '@/modules/suppliers/suppliers.service';
 interface SuppliersRoutesDeps {
   suppliersService: SuppliersService;
   iamService: IamService;
+  auditLogger?: (input: AuditInput) => Promise<void>;
 }
 
 function getHeadersJson(headers: Headers): Record<string, string> {
@@ -42,14 +45,19 @@ function parseCallbackBody(rawBody: string, contentType: string): Record<string,
   return {};
 }
 
-export function createSuppliersRoutes({ suppliersService, iamService }: SuppliersRoutesDeps) {
+export function createSuppliersRoutes({
+  suppliersService,
+  iamService,
+  auditLogger = async () => {},
+}: SuppliersRoutesDeps) {
   const adminRoutes = new Elysia()
     .get(
       '/admin/suppliers',
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
         return ok(requestId, await suppliersService.listSuppliers());
       },
       {
@@ -65,7 +73,8 @@ export function createSuppliersRoutes({ suppliersService, iamService }: Supplier
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
         return ok(
           requestId,
           await suppliersService.getSupplierBalance({ supplierId: params.supplierId }),
@@ -83,11 +92,28 @@ export function createSuppliersRoutes({ suppliersService, iamService }: Supplier
       '/admin/suppliers/:supplierId/catalog/sync',
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
+        const result = await suppliersService.triggerCatalogSync({ supplierId: params.supplierId });
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'TRIGGER_SUPPLIER_CATALOG_SYNC',
+          resourceType: 'SUPPLIER',
+          resourceId: params.supplierId,
+          details: {
+            supplierId: params.supplierId,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(
           requestId,
-          await suppliersService.triggerCatalogSync({ supplierId: params.supplierId }),
+          result,
         );
       },
       {
@@ -103,7 +129,8 @@ export function createSuppliersRoutes({ suppliersService, iamService }: Supplier
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
         return ok(
           requestId,
           await suppliersService.listSyncLogs({ supplierId: params.supplierId }),
@@ -121,12 +148,30 @@ export function createSuppliersRoutes({ suppliersService, iamService }: Supplier
       '/admin/supplier-configs',
       async ({ body, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         await suppliersService.upsertConfig({
           ...body,
           timeoutMs: body.timeoutMs ?? 2000,
         });
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'UPSERT_SUPPLIER_CONFIG',
+          resourceType: 'SUPPLIER_CONFIG',
+          resourceId: body.supplierId,
+          details: {
+            supplierId: body.supplierId,
+            configJson: body.configJson,
+            timeoutMs: body.timeoutMs ?? 2000,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {

@@ -2,7 +2,7 @@
 
 ## 1. 文档定位
 
-通知服务负责 ISP 话费充值 V1 的 Webhook 终态通知，包括签名、投递、重试、死信与投递日志。
+通知服务负责 Webhook 终态通知，包括签名、投递、重试、死信与投递日志。
 
 ## 2. 职责边界
 
@@ -23,7 +23,7 @@
 
 ## 3. 通知范围
 
-V1 仅对订单终态发送通知：
+仅对订单终态发送通知：
 
 - `ORDER_SUCCESS`
 - `ORDER_REFUNDED`
@@ -46,6 +46,7 @@ V1 仅对订单终态发送通知：
 2. 终态通知至少投递一次。
 3. 通知失败不阻塞订单终态。
 4. 相同任务重试必须幂等。
+5. 后台任务详情必须可查看最近一次投递结果与重试计划。
 
 ## 6. 重试策略
 
@@ -66,13 +67,14 @@ V1 仅对订单终态发送通知：
 
 - `GET /admin/notifications/tasks`
 - `GET /admin/notifications/tasks/:taskNo`
+- `GET /admin/notifications/tasks/:taskNo/delivery-logs`
 - `POST /admin/notifications/tasks/:taskNo/retry`
 - `GET /admin/notifications/dead-letters`
 
-### 7.2 当前实现说明
+### 7.2 内部能力
 
-- 当前单体实现以内存事件总线触发通知创建，不暴露独立 `/internal/notifications/*` HTTP 接口。
-- 后台人工重试入口为 `POST /admin/notifications/tasks/:taskNo/retry`。
+- 通知创建通过领域事件触发。
+- 通知投递由 Worker 统一调度。
 
 ## 8. 数据设计建议
 
@@ -92,8 +94,9 @@ V1 仅对订单终态发送通知：
 2. 退款订单可触发退款通知。
 3. Webhook 失败后会自动重试。
 4. 超过重试次数的任务会进入死信。
+5. 技术支持可查看任务详情与投递日志用于排障。
 
-## 11. V1 不做
+## 11. 明确不做
 
 - 短信通知。
 - 邮件通知。

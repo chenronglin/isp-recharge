@@ -3,14 +3,15 @@
 ## 模块职责
 
 - 负责后台登录、刷新、登出。
-- 管理后台用户、角色、权限、数据权限与审计基础能力。
+- 管理后台用户、角色、访问控制、登录留痕与审计基础能力。
 
 ## 核心表
 
 - `iam.admin_users`
 - `iam.roles`
-- `iam.permissions`
+- `iam.user_role_relations`
 - `iam.login_sessions`
+- `iam.login_logs`
 - `iam.operation_audit_logs`
 
 ## 核心接口
@@ -20,8 +21,12 @@
 - `POST /admin/auth/logout`
 - `GET /admin/users`
 - `POST /admin/users`
+- `PATCH /admin/users/:userId/status`
+- `POST /admin/users/:userId/roles`
 - `GET /admin/roles`
 - `POST /admin/roles`
+- `GET /admin/audit-logs`
+- `GET /admin/login-logs`
 
 ## 关键规则
 

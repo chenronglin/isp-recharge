@@ -2,7 +2,7 @@
 
 ## 1. 文档定位
 
-供应商服务是 ISP 话费充值 V1 中最关键、最复杂的模块，负责与上游供应商之间的数据同步、商品映射、提单、查单、回调、日志、对账与健康治理。
+供应商服务是最关键、最复杂的模块，负责与上游供应商之间的数据同步、商品映射、提单、查单、回调、日志、对账与健康治理。
 
 ## 2. 职责边界
 
@@ -18,6 +18,7 @@
 - 履约成功率、超时率、错误率统计。
 - 未终态订单差异扫描与日对账。
 - 供应商通道熔断与恢复。
+- 供应商余额查询。
 
 ### 2.2 不负责内容
 
@@ -25,6 +26,7 @@
 - 订单主状态写入。
 - 渠道余额记账。
 - 对渠道直接回调。
+- 供应商自助门户。
 
 ## 3. 设计原则
 
@@ -33,6 +35,7 @@
 3. 商品同步与订单同步分离。
 4. 对账与日志是核心能力，不是附属能力。
 5. 任何供应商协议差异都必须收敛在适配器内部。
+6. 平台对供应商仅暴露回调接入入口，不承诺供应商自助管理接口。
 
 ## 4. 核心对象
 
@@ -104,6 +107,7 @@
 - `submitOrder()`
 - `queryOrder()`
 - `parseCallback()`
+- `getBalance()`
 
 ### 6.2 提单流程
 
@@ -151,6 +155,7 @@
 3. 采购价
 4. 平台利润
 5. 默认优先级
+6. 最近一次成功耗时
 
 ### 7.3 实时熔断
 
@@ -234,8 +239,10 @@
 ### 10.1 后台 API
 
 - `GET /admin/suppliers`
-- `POST /admin/suppliers/:supplierId/config`
+- `GET /admin/suppliers/:supplierId/balance`
+- `POST /admin/suppliers/:supplierId/catalog/sync`
 - `GET /admin/suppliers/:supplierId/sync-logs`
+- `POST /admin/supplier-configs`
 - `GET /admin/suppliers/reconcile-diffs`
 - `POST /admin/suppliers/:supplierId/recover-circuit-breaker`
 
@@ -278,8 +285,9 @@
 4. 未终态订单可通过查单补偿推进。
 5. 可输出商品差异、订单差异、成本差异清单。
 6. 熔断、恢复、降权规则可验证。
+7. 运营可查询供应商余额并手工触发目录同步。
 
-## 14. V1 不做
+## 14. 明确不做
 
 - 供应商侧自动退款依赖。
 - 晚到成功后的自动二次扣款。

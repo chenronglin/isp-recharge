@@ -2,8 +2,8 @@
 
 ## 模块职责
 
-- 维护账户、流水与退款冲正。
-- 作为平台资金唯一归口，为支付和订单主链路提供资金事实。
+- 维护账户、流水、渠道充值与退款冲正。
+- 作为平台资金唯一归口，为订单主链路提供资金事实。
 
 ## 核心表
 
@@ -14,13 +14,14 @@
 
 - `GET /admin/accounts`
 - `GET /admin/ledger-entries`
-- `POST /internal/settlement/accounts/freeze`
-- `POST /internal/settlement/accounts/unfreeze`
+- `GET /admin/ledger-entries/:entryId`
+- `POST /admin/channels/:channelId/recharge`
 
 ## 关键规则
 
 - 所有资金变化必须写流水。
 - 账务流水不可物理删除，只能冲正。
+- 退款失败必须支持补偿重试。
 
 ## 测试重点
 

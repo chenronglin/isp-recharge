@@ -1,4 +1,5 @@
 import { Elysia } from 'elysia';
+import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { ok } from '@/lib/http';
@@ -25,7 +26,8 @@ export function createLedgerRoutes({
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['FINANCE']);
         return ok(requestId, await ledgerService.listAccounts());
       },
       {
@@ -41,7 +43,8 @@ export function createLedgerRoutes({
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['FINANCE']);
         return ok(requestId, await ledgerService.listLedgerEntries());
       },
       {
@@ -59,6 +62,7 @@ export function createLedgerRoutes({
         const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['FINANCE']);
         await channelsService.getChannelById(params.channelId);
         const result = await ledgerService.rechargeChannelBalance({
           channelId: params.channelId,

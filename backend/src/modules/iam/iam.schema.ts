@@ -20,3 +20,11 @@ export const CreateRoleBodySchema = t.Object({
   roleCode: t.String({ minLength: 2 }),
   roleName: t.String({ minLength: 1 }),
 });
+
+export const UpdateAdminUserStatusBodySchema = t.Object({
+  status: t.Union([t.Literal('ACTIVE'), t.Literal('DISABLED')]),
+});
+
+export const AssignAdminUserRoleBodySchema = t.Object({
+  roleCode: t.String({ minLength: 2 }),
+});

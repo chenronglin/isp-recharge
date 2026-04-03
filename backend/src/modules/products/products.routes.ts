@@ -1,4 +1,5 @@
 import { Elysia, t } from 'elysia';
+import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { ok } from '@/lib/http';
@@ -31,7 +32,8 @@ export function createProductsRoutes({
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
-        await iamService.requireActiveAdmin(tokenPayload.sub);
+        const admin = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
         return ok(requestId, await productsService.listAdminProducts());
       },
       {
@@ -51,6 +53,7 @@ export function createProductsRoutes({
           request.headers.get('authorization'),
         );
         const operator = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         const product = await productsService.createRechargeProduct(body);
 
         await writeAuditLog({
@@ -84,6 +87,7 @@ export function createProductsRoutes({
           request.headers.get('authorization'),
         );
         const operator = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
         const product = await productsService.updateRechargeProduct(params.productId, body);
 
         await writeAuditLog({

@@ -26,7 +26,7 @@ afterAll(() => {
 });
 
 describe('管理员登录', () => {
-  test('登录成功后应写入 refresh session', async () => {
+  test('登录成功后应写入 refresh session 和登录日志', async () => {
     const response = await runtime.app.handle(
       new Request('http://localhost/admin/auth/login', {
         method: 'POST',
@@ -53,6 +53,13 @@ describe('管理员登录', () => {
       WHERE user_id = 'seed-admin-user'
         AND status = 'ACTIVE'
     `;
+    const loginLogRows = await db<{ total: number; lastResult: string | null }[]>`
+      SELECT
+        COUNT(*)::int AS total,
+        MAX(result) AS "lastResult"
+      FROM iam.login_logs
+      WHERE user_id = 'seed-admin-user'
+    `;
 
     expect(response.status).toBe(200);
     expect(payload.code).toBe(0);
@@ -60,5 +67,7 @@ describe('管理员登录', () => {
     expect(payload.data?.refreshToken).toBeTruthy();
     expect(payload.data?.expiresInSeconds).toBe(env.adminAccessTokenExpiresInSeconds);
     expect(sessionRows[0]?.total).toBe(1);
+    expect(loginLogRows[0]?.total).toBe(1);
+    expect(loginLogRows[0]?.lastResult).toBe('SUCCESS');
   });
 });

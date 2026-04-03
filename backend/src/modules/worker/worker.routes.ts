@@ -1,7 +1,9 @@
 import { Elysia } from 'elysia';
+import { requireAnyAdminRole } from '@/lib/admin-roles';
+import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { buildPageResult, ok, parsePagination } from '@/lib/http';
-import { getRequestIdFromRequest } from '@/lib/route-meta';
+import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
 import { EnqueueJobBodySchema } from '@/modules/worker/worker.schema';
 import type { WorkerService } from '@/modules/worker/worker.service';
@@ -18,7 +20,8 @@ export function createWorkerRoutes({ workerService, iamService }: WorkerRoutesDe
       async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
 
         const { page, pageSize } = parsePagination(query as Record<string, unknown>);
         const result = await workerService.list(page, pageSize);
@@ -38,7 +41,8 @@ export function createWorkerRoutes({ workerService, iamService }: WorkerRoutesDe
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
 
         return ok(requestId, await workerService.getById(params.jobId));
       },
@@ -54,9 +58,25 @@ export function createWorkerRoutes({ workerService, iamService }: WorkerRoutesDe
       '/:jobId/retry',
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS', 'SUPPORT']);
         await workerService.retry(params.jobId);
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'RETRY_WORKER_JOB',
+          resourceType: 'WORKER_JOB',
+          resourceId: params.jobId,
+          details: {
+            jobId: params.jobId,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -71,9 +91,25 @@ export function createWorkerRoutes({ workerService, iamService }: WorkerRoutesDe
       '/:jobId/cancel',
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS', 'SUPPORT']);
         await workerService.cancel(params.jobId);
+
+        await writeAuditLog({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'CANCEL_WORKER_JOB',
+          resourceType: 'WORKER_JOB',
+          resourceId: params.jobId,
+          details: {
+            jobId: params.jobId,
+          },
+          requestId,
+          ip: clientIp,
+        });
+
         return ok(requestId, { success: true });
       },
       {
@@ -89,7 +125,8 @@ export function createWorkerRoutes({ workerService, iamService }: WorkerRoutesDe
       async ({ request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
-        await iamService.requireActiveAdmin(payload.sub);
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
         return ok(requestId, await workerService.listDeadLetters());
       },
       {
