@@ -213,20 +213,21 @@ test('后台可创建黑白名单并查询风险决策', async () => {
   );
   const listJson = (await listResponse.json()) as {
     code: number;
-    data: Array<Record<string, unknown>>;
+    data: {
+      records: Array<Record<string, unknown>>;
+    };
   };
 
   expect(createResponse.status).toBe(200);
   expect(createJson.code).toBe(0);
   expect(createJson.data).toMatchObject({
-    entryType: 'MOBILE',
-    targetValue: '13900139000',
-    listType: 'BLACK',
+    resourceType: 'RISK_BLACK_WHITE_ENTRY',
+    status: 'ACTIVE',
   });
   expect(listResponse.status).toBe(200);
   expect(listJson.code).toBe(0);
-  expect(Array.isArray(listJson.data)).toBe(true);
-  expect(listJson.data[0]).toMatchObject({
+  expect(Array.isArray(listJson.data.records)).toBe(true);
+  expect(listJson.data.records[0]).toMatchObject({
     channelId: 'seed-channel-demo',
   });
 });

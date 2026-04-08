@@ -23,10 +23,10 @@ export function createWorkerRoutes({ workerService, iamService }: WorkerRoutesDe
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
 
-        const { page, pageSize } = parsePagination(query as Record<string, unknown>);
-        const result = await workerService.list(page, pageSize);
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const result = await workerService.list(pageNum, pageSize);
 
-        return ok(requestId, buildPageResult(result.items, page, pageSize, result.total));
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
         detail: {

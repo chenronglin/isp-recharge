@@ -124,4 +124,57 @@ describe('OpenAPI 文档服务', () => {
       }
     }
   });
+
+  test('后台关键接口应暴露统一响应 schema', async () => {
+    const response = await runtime.app.handle(new Request('http://localhost/openapi/json'));
+    const json = (await response.json()) as {
+      paths?: Record<
+        string,
+        Record<
+          string,
+          {
+            responses?: Record<
+              string,
+              {
+                content?: Record<
+                  string,
+                  {
+                    schema?: {
+                      properties?: Record<string, any>;
+                    };
+                  }
+                >;
+              }
+            >;
+          }
+        >
+      >;
+    };
+
+    expect(response.status).toBe(200);
+
+    const loginSchema =
+      json.paths?.['/admin/auth/login']?.post?.responses?.['200']?.content?.['application/json']
+        ?.schema;
+    const meSchema =
+      json.paths?.['/admin/auth/me']?.get?.responses?.['200']?.content?.['application/json']
+        ?.schema;
+    const ordersSchema =
+      json.paths?.['/admin/orders/']?.get?.responses?.['200']?.content?.['application/json']
+        ?.schema;
+    const deliveryLogsSchema =
+      json.paths?.['/admin/notifications/tasks/{taskNo}/delivery-logs']?.get?.responses?.['200']
+        ?.content?.['application/json']?.schema;
+
+    expect(loginSchema?.properties?.data?.properties?.accessToken).toBeTruthy();
+    expect(loginSchema?.properties?.data?.properties?.refreshToken).toBeTruthy();
+    expect(loginSchema?.properties?.data?.properties?.expiresInSeconds).toBeTruthy();
+    expect(meSchema?.properties?.data?.properties?.roleCodes).toBeTruthy();
+    expect(ordersSchema?.properties?.data?.properties?.records).toBeTruthy();
+    expect(ordersSchema?.properties?.data?.properties?.pageNum).toBeTruthy();
+    expect(ordersSchema?.properties?.data?.properties?.pageSize).toBeTruthy();
+    expect(ordersSchema?.properties?.data?.properties?.total).toBeTruthy();
+    expect(ordersSchema?.properties?.data?.properties?.totalPages).toBeTruthy();
+    expect(deliveryLogsSchema?.properties?.data?.properties?.records).toBeTruthy();
+  });
 });

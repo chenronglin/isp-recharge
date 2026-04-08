@@ -6,6 +6,8 @@ export interface Account {
   frozenBalance: number;
   currency: string;
   status: string;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface LedgerEntry {

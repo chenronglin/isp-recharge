@@ -47,3 +47,25 @@ export function parseJsonValue<T>(input: unknown, fallback: T): T {
 
   return input as T;
 }
+
+export function toIsoDateTime(input: string | Date | null | undefined): string | null {
+  if (!input) {
+    return null;
+  }
+
+  const date = input instanceof Date ? input : new Date(input);
+
+  if (Number.isNaN(date.getTime())) {
+    return null;
+  }
+
+  return date.toISOString();
+}
+
+export function toAmountFen(input: number | null | undefined): number | null {
+  if (input === null || input === undefined) {
+    return null;
+  }
+
+  return Math.round(Number(input) * 100);
+}

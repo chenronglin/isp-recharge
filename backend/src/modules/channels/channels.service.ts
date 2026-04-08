@@ -1,4 +1,5 @@
 import { badRequest, forbidden, notFound, unauthorized } from '@/lib/errors';
+import { toAmountFen, toIsoDateTime } from '@/lib/utils';
 import {
   buildOpenApiCanonicalString,
   decryptText,
@@ -21,8 +22,36 @@ function isUniqueConstraintViolation(error: unknown): error is { code?: string; 
 export class ChannelsService implements ChannelContract {
   constructor(private readonly repository: ChannelsRepository) {}
 
-  async listChannels() {
-    return this.repository.listChannels();
+  private toChannel(channel: {
+    id: string;
+    channelCode: string;
+    channelName: string;
+    channelType: string;
+    status: string;
+    settlementMode: string;
+    createdAt: string;
+    updatedAt: string;
+  }) {
+    return {
+      ...channel,
+      createdAt: toIsoDateTime(channel.createdAt) ?? channel.createdAt,
+      updatedAt: toIsoDateTime(channel.updatedAt) ?? channel.updatedAt,
+    };
+  }
+
+  async listChannels(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listChannels(input);
+    return {
+      items: result.items.map((item) => this.toChannel(item)),
+      total: result.total,
+    };
   }
 
   async listCredentials() {
@@ -238,6 +267,68 @@ export class ChannelsService implements ChannelContract {
       throw notFound('渠道不存在');
     }
 
-    return channel;
+    return this.toChannel(channel);
+  }
+
+  async listChannelCredentials(channelId: string) {
+    await this.getChannelById(channelId);
+    const credentials = await this.repository.listCredentialsByChannelId(channelId);
+
+    return credentials.map((item) => ({
+      id: item.id,
+      channelId: item.channelId,
+      accessKey: item.accessKey,
+      signAlgorithm: item.signAlgorithm,
+      status: item.status,
+      expiresAt: toIsoDateTime(item.expiresAt),
+      createdAt: toIsoDateTime(item.createdAt) ?? item.createdAt,
+      updatedAt: toIsoDateTime(item.updatedAt) ?? item.updatedAt,
+    }));
+  }
+
+  async getAdminCallbackConfig(channelId: string) {
+    const callbackConfig = await this.getCallbackConfig(channelId);
+
+    return {
+      id: callbackConfig.id,
+      channelId: callbackConfig.channelId,
+      callbackUrl: callbackConfig.callbackUrl,
+      signType: callbackConfig.signType,
+      retryEnabled: callbackConfig.retryEnabled,
+      timeoutSeconds: callbackConfig.timeoutSeconds,
+      createdAt: toIsoDateTime(callbackConfig.createdAt) ?? callbackConfig.createdAt,
+      updatedAt: toIsoDateTime(callbackConfig.updatedAt) ?? callbackConfig.updatedAt,
+    };
+  }
+
+  async getAdminOrderPolicy(channelId: string) {
+    await this.getChannelById(channelId);
+    const [authorizedProductIds, limitRule, pricePolicies] = await Promise.all([
+      this.repository.listAuthorizationsByChannelId(channelId),
+      this.repository.findLimitRule(channelId),
+      this.repository.listPricePoliciesByChannelId(channelId),
+    ]);
+
+    return {
+      channelId,
+      authorizedProductIds,
+      limitRule: limitRule
+        ? {
+            singleLimitAmountFen: toAmountFen(limitRule.singleLimit) ?? 0,
+            dailyLimitAmountFen: toAmountFen(limitRule.dailyLimit) ?? 0,
+            monthlyLimitAmountFen: toAmountFen(limitRule.monthlyLimit) ?? 0,
+            qpsLimit: limitRule.qpsLimit,
+          }
+        : null,
+      pricePolicies: pricePolicies.map((item) => ({
+        id: item.id,
+        productId: item.productId,
+        saleAmountFen: toAmountFen(item.salePrice) ?? 0,
+        currency: item.currency,
+        status: item.status,
+        effectiveFrom: toIsoDateTime(item.effectiveFrom),
+        effectiveTo: toIsoDateTime(item.effectiveTo),
+      })),
+    };
   }
 }

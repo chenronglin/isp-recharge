@@ -1,8 +1,8 @@
 import { generateBusinessNo, generateId } from '@/lib/id';
 import { db, first } from '@/lib/sql';
 import { parseJsonValue } from '@/lib/utils';
-import { notificationsSql } from '@/modules/notifications/notifications.sql';
 import type {
+  NotificationDeadLetter,
   NotificationDeliveryLog,
   NotificationTask,
   NotificationTaskType,
@@ -23,9 +23,107 @@ export class NotificationsRepository {
     };
   }
 
-  async listTasks(): Promise<NotificationTask[]> {
-    const rows = await db.unsafe<NotificationTask[]>(notificationsSql.listTasks);
-    return rows.map((row) => this.mapTask(row));
+  async listTasks(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    taskNo?: string;
+    bizNo?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: NotificationTask[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const sortByMap: Record<string, string> = {
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+      nextRetryAt: 'next_retry_at',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'created_at';
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(
+        `(task_no ILIKE $${index} OR order_no ILIKE $${index} OR channel_id ILIKE $${index})`,
+      );
+    }
+
+    const exactConditions: Array<[string, string | undefined]> = [
+      ['task_no', input.taskNo],
+      ['order_no', input.bizNo],
+      ['status', input.status],
+    ];
+
+    for (const [column, value] of exactConditions) {
+      if (!value?.trim()) {
+        continue;
+      }
+
+      params.push(value.trim());
+      whereClauses.push(`${column} = $${params.length}`);
+    }
+
+    if (input.startTime) {
+      params.push(input.startTime);
+      whereClauses.push(`created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (input.endTime) {
+      params.push(input.endTime);
+      whereClauses.push(`created_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+
+    const rows = await db.unsafe<NotificationTask[]>(
+      `
+        SELECT
+          id,
+          task_no AS "taskNo",
+          order_no AS "orderNo",
+          channel_id AS "channelId",
+          notify_type AS "notifyType",
+          destination,
+          payload_json AS "payloadJson",
+          signature,
+          status,
+          attempt_count AS "attemptCount",
+          max_attempts AS "maxAttempts",
+          last_error AS "lastError",
+          next_retry_at AS "nextRetryAt",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM notification.notification_tasks
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM notification.notification_tasks
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => this.mapTask(row)),
+      total: total?.total ?? 0,
+    };
   }
 
   async findTaskByTaskNo(taskNo: string): Promise<NotificationTask | null> {
@@ -42,7 +140,10 @@ export class NotificationsRepository {
         status,
         attempt_count AS "attemptCount",
         max_attempts AS "maxAttempts",
-        last_error AS "lastError"
+        last_error AS "lastError",
+        next_retry_at AS "nextRetryAt",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
       FROM notification.notification_tasks
       WHERE task_no = ${taskNo}
       LIMIT 1
@@ -65,7 +166,10 @@ export class NotificationsRepository {
         status,
         attempt_count AS "attemptCount",
         max_attempts AS "maxAttempts",
-        last_error AS "lastError"
+        last_error AS "lastError",
+        next_retry_at AS "nextRetryAt",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
       FROM notification.notification_tasks
       WHERE order_no = ${orderNo}
       ORDER BY created_at DESC, id DESC
@@ -75,10 +179,7 @@ export class NotificationsRepository {
     return row ? this.mapTask(row) : null;
   }
 
-  async listRecentDeliveryLogsByTaskNo(
-    taskNo: string,
-    limit = 10,
-  ): Promise<NotificationDeliveryLog[]> {
+  async listRecentDeliveryLogsByTaskNo(taskNo: string, limit = 10): Promise<NotificationDeliveryLog[]> {
     const rows = await db<NotificationDeliveryLog[]>`
       SELECT
         id,
@@ -95,6 +196,69 @@ export class NotificationsRepository {
     `;
 
     return rows.map((row) => this.mapDeliveryLog(row));
+  }
+
+  async listDeliveryLogs(input: {
+    taskNo: string;
+    pageNum: number;
+    pageSize: number;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: NotificationDeliveryLog[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [input.taskNo];
+    const whereClauses = ['task_no = $1'];
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (input.startTime) {
+      params.push(input.startTime);
+      whereClauses.push(`created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (input.endTime) {
+      params.push(input.endTime);
+      whereClauses.push(`created_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+
+    const rows = await db.unsafe<NotificationDeliveryLog[]>(
+      `
+        SELECT
+          id,
+          task_no AS "taskNo",
+          request_payload_json AS "requestPayloadJson",
+          response_status AS "responseStatus",
+          response_body AS "responseBody",
+          success,
+          created_at AS "createdAt"
+        FROM notification.notification_delivery_logs
+        ${whereSql}
+        ORDER BY created_at ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM notification.notification_delivery_logs
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => this.mapDeliveryLog(row)),
+      total: total?.total ?? 0,
+    };
   }
 
   async createTask(input: {
@@ -148,7 +312,10 @@ export class NotificationsRepository {
         status,
         attempt_count AS "attemptCount",
         max_attempts AS "maxAttempts",
-        last_error AS "lastError"
+        last_error AS "lastError",
+        next_retry_at AS "nextRetryAt",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
     `;
 
     const task = rows[0];
@@ -274,15 +441,68 @@ export class NotificationsRepository {
     });
   }
 
-  async listDeadLetters() {
-    return db`
-      SELECT
-        id,
-        task_no AS "taskNo",
-        reason,
-        created_at AS "createdAt"
-      FROM notification.notification_dead_letters
-      ORDER BY created_at DESC
-    `;
+  async listDeadLetters(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: NotificationDeadLetter[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(`(task_no ILIKE $${index} OR reason ILIKE $${index})`);
+    }
+
+    if (input.startTime) {
+      params.push(input.startTime);
+      whereClauses.push(`created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (input.endTime) {
+      params.push(input.endTime);
+      whereClauses.push(`created_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+
+    const items = await db.unsafe<NotificationDeadLetter[]>(
+      `
+        SELECT
+          id,
+          task_no AS "taskNo",
+          reason,
+          created_at AS "createdAt"
+        FROM notification.notification_dead_letters
+        ${whereSql}
+        ORDER BY created_at ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM notification.notification_dead_letters
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items,
+      total: total?.total ?? 0,
+    };
   }
 }

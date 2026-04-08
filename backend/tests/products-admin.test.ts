@@ -111,24 +111,22 @@ describe('平台商品后台维护', () => {
     const payload = (await response.json()) as {
       code: number;
       data: {
-        id: string;
-        productCode: string;
-        productName: string;
-        salesUnit: string;
+        resourceId: string;
+        resourceType: string;
+        status: string;
       };
     };
 
     expect(response.status).toBe(200);
     expect(payload.code).toBe(0);
-    expect(payload.data.id).toBeString();
     expect(payload.data).toMatchObject({
-      productCode: 'cmcc-guangdong-fast-300',
-      productName: '广东移动话费 300 元快充',
-      salesUnit: 'CNY',
+      resourceId: expect.any(String),
+      resourceType: 'RECHARGE_PRODUCT',
+      status: 'ACTIVE',
     });
 
     const adminListResponse = await runtime.app.handle(
-      new Request('http://localhost/admin/products', {
+      new Request('http://localhost/admin/products?keyword=cmcc-guangdong-fast-300&pageSize=20', {
         method: 'GET',
         headers: {
           authorization: await buildAdminAuthorizationHeader(),
@@ -137,12 +135,14 @@ describe('平台商品后台维护', () => {
     );
     const adminListPayload = (await adminListResponse.json()) as {
       code: number;
-      data: Array<{ productCode: string }>;
+      data: {
+        records: Array<{ productCode: string }>;
+      };
     };
 
     expect(adminListResponse.status).toBe(200);
     expect(adminListPayload.code).toBe(0);
-    expect(adminListPayload.data).toEqual(
+    expect(adminListPayload.data.records).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           productCode: 'cmcc-guangdong-fast-300',
@@ -213,9 +213,8 @@ describe('平台商品后台维护', () => {
     const payload = (await response.json()) as {
       code: number;
       data: {
-        id: string;
-        productCode: string;
-        productName: string;
+        resourceId: string;
+        resourceType: string;
         status: string;
       };
     };
@@ -223,14 +222,13 @@ describe('平台商品后台维护', () => {
     expect(response.status).toBe(200);
     expect(payload.code).toBe(0);
     expect(payload.data).toMatchObject({
-      id: productId,
-      productCode,
-      productName: '广东移动话费 50 元混充（停用）',
+      resourceId: productId,
+      resourceType: 'RECHARGE_PRODUCT',
       status: 'INACTIVE',
     });
 
     const adminListResponse = await runtime.app.handle(
-      new Request('http://localhost/admin/products', {
+      new Request(`http://localhost/admin/products?keyword=${productCode}&pageSize=20`, {
         method: 'GET',
         headers: {
           authorization: await buildAdminAuthorizationHeader(),
@@ -239,12 +237,14 @@ describe('平台商品后台维护', () => {
     );
     const adminListPayload = (await adminListResponse.json()) as {
       code: number;
-      data: Array<{ id: string; status: string }>;
+      data: {
+        records: Array<{ id: string; status: string }>;
+      };
     };
 
     expect(adminListResponse.status).toBe(200);
     expect(adminListPayload.code).toBe(0);
-    expect(adminListPayload.data).toEqual(
+    expect(adminListPayload.data.records).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
           id: productId,

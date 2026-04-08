@@ -78,8 +78,8 @@ async function createChannel(adminToken: string) {
   return response.json() as Promise<{
     code: number;
     data: {
-      id: string;
-      channelCode: string;
+      resourceId: string;
+      status: string;
     };
   }>;
 }
@@ -102,7 +102,7 @@ describe('后台渠道充值', () => {
   test('首次充值会自动初始化渠道余额账户并写入充值流水', async () => {
     const adminToken = await buildAdminAuthorizationHeader();
     const channelPayload = await createChannel(adminToken);
-    const channelId = channelPayload.data.id;
+    const channelId = channelPayload.data.resourceId;
 
     const response = await runtime.app.handle(
       new Request(`http://localhost/admin/channels/${channelId}/recharge`, {
@@ -121,18 +121,18 @@ describe('后台渠道充值', () => {
     const payload = (await response.json()) as {
       code: number;
       data: {
-        channelId: string;
-        amount: number;
-        referenceNo: string;
+        resourceId: string;
+        resourceType: string;
+        status: string;
       };
     };
 
     expect(response.status).toBe(200);
     expect(payload.code).toBe(0);
     expect(payload.data).toMatchObject({
-      channelId,
-      amount: 500,
-      referenceNo: 'manual-recharge-request-1',
+      resourceId: channelId,
+      resourceType: 'CHANNEL_ACCOUNT',
+      status: 'RECHARGED',
     });
 
     const accountRows = await db<
@@ -194,7 +194,7 @@ describe('后台渠道充值', () => {
   test('新建渠道充值后可直接通过 open-api 创建订单', async () => {
     const adminToken = await buildAdminAuthorizationHeader();
     const channelPayload = await createChannel(adminToken);
-    const channelId = channelPayload.data.id;
+    const channelId = channelPayload.data.resourceId;
     const accessKey = `ak-${Date.now()}`;
     const secretKey = `sk-${Date.now()}-manual`;
     const productId = buildSeedRechargeProductId({
@@ -274,6 +274,7 @@ describe('后台渠道充值', () => {
         },
         body: JSON.stringify({
           amount: 500,
+          remark: '联调充值',
         }),
       }),
     );

@@ -60,8 +60,12 @@ describe('createOrdersRoutes', () => {
       new Request('http://localhost/admin/orders/order-1/retry-notify', {
         method: 'POST',
         headers: {
+          'content-type': 'application/json',
           authorization: await buildAdminAuthorizationHeader(),
         },
+        body: JSON.stringify({
+          reason: 'manual retry',
+        }),
       }),
     );
     const payload = (await response.json()) as {

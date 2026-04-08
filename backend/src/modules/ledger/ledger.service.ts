@@ -1,16 +1,111 @@
 import { badRequest, notFound } from '@/lib/errors';
+import { toAmountFen, toIsoDateTime } from '@/lib/utils';
 import type { LedgerContract } from '@/modules/ledger/contracts';
 import type { LedgerRepository } from '@/modules/ledger/ledger.repository';
 
 export class LedgerService implements LedgerContract {
   constructor(private readonly repository: LedgerRepository) {}
 
-  async listAccounts() {
-    return this.repository.listAccounts();
+  private toAccountDto(account: {
+    id: string;
+    ownerType: string;
+    ownerId: string;
+    availableBalance: number;
+    frozenBalance: number;
+    currency: string;
+    status: string;
+    createdAt?: string;
+    updatedAt?: string;
+  }) {
+    return {
+      id: account.id,
+      ownerType: account.ownerType,
+      ownerId: account.ownerId,
+      availableBalanceFen: toAmountFen(account.availableBalance) ?? 0,
+      frozenBalanceFen: toAmountFen(account.frozenBalance) ?? 0,
+      currency: account.currency,
+      status: account.status,
+      createdAt: toIsoDateTime(account.createdAt),
+      updatedAt: toIsoDateTime(account.updatedAt),
+    };
   }
 
-  async listLedgerEntries() {
-    return this.repository.listLedgerEntries();
+  private toLedgerEntryDto(entry: {
+    id: string;
+    ledgerNo: string;
+    accountId: string;
+    orderNo: string | null;
+    actionType: string;
+    direction: string;
+    amount: number;
+    currency: string;
+    balanceBefore: number;
+    balanceAfter: number;
+    referenceType: string;
+    referenceNo: string;
+    createdAt: string;
+  }) {
+    return {
+      id: entry.id,
+      ledgerNo: entry.ledgerNo,
+      accountId: entry.accountId,
+      orderNo: entry.orderNo,
+      actionType: entry.actionType,
+      direction: entry.direction,
+      amountFen: toAmountFen(entry.amount) ?? 0,
+      currency: entry.currency,
+      balanceBeforeFen: toAmountFen(entry.balanceBefore) ?? 0,
+      balanceAfterFen: toAmountFen(entry.balanceAfter) ?? 0,
+      referenceType: entry.referenceType,
+      referenceNo: entry.referenceNo,
+      createdAt: toIsoDateTime(entry.createdAt) ?? entry.createdAt,
+    };
+  }
+
+  async listAccounts(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listAccounts(input);
+    return {
+      items: result.items.map((item) => this.toAccountDto(item)),
+      total: result.total,
+    };
+  }
+
+  async getAccountById(accountId: string) {
+    const account = await this.repository.findAccountById(accountId);
+
+    if (!account) {
+      throw notFound('账户不存在');
+    }
+
+    return this.toAccountDto(account);
+  }
+
+  async listLedgerEntries(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    accountId?: string;
+    orderNo?: string;
+    channelId?: string;
+    entryType?: string;
+    bizNo?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listLedgerEntries(input);
+    return {
+      items: result.items.map((item) => this.toLedgerEntryDto(item)),
+      total: result.total,
+    };
   }
 
   async getLedgerEntryById(entryId: string) {
@@ -20,7 +115,7 @@ export class LedgerService implements LedgerContract {
       throw notFound('账务流水不存在');
     }
 
-    return entry;
+    return this.toLedgerEntryDto(entry);
   }
 
   async rechargeChannelBalance(input: {

@@ -27,9 +27,7 @@ export interface LoginResult {
   accessToken: string;
   refreshToken: string;
   expiresInSeconds: number;
-  user: Pick<AdminUser, 'id' | 'username' | 'displayName' | 'status'> & {
-    roleCodes: string[];
-  };
+  user: AdminUserProfile;
 }
 
 export interface AdminContext {
@@ -37,6 +35,27 @@ export interface AdminContext {
   username: string;
   displayName: string;
   roleCodes: string[];
+}
+
+export interface AdminUserProfile {
+  id: string;
+  username: string;
+  displayName: string;
+  status: string;
+  roleCodes: string[];
+}
+
+export interface AdminUserListItem extends AdminUserProfile {
+  email: string | null;
+  mobile: string | null;
+  lastLoginAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AdminUserDetail extends AdminUserListItem {
+  failedLoginAttempts: number;
+  lockedUntil: string | null;
 }
 
 export interface AuditLogRecord {

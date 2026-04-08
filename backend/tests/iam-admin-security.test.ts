@@ -134,7 +134,7 @@ describe('IAM 权限与审计', () => {
     `;
 
     const loginLogsResponse = await runtime.app.handle(
-      new Request('http://localhost/admin/login-logs?page=1&pageSize=20', {
+      new Request('http://localhost/admin/login-logs?pageNum=1&pageSize=20', {
         method: 'GET',
         headers: {
           authorization: await buildAdminAuthorizationHeader('seed-admin-user', ['SUPER_ADMIN']),
@@ -144,7 +144,7 @@ describe('IAM 权限与审计', () => {
     const loginLogsPayload = (await loginLogsResponse.json()) as {
       code: number;
       data: {
-        items: Array<{
+        records: Array<{
           username: string;
           result: string;
           failureReason: string | null;
@@ -157,9 +157,9 @@ describe('IAM 权限与审计', () => {
     expect(logSummaryRows[0]?.lockedCount).toBeGreaterThanOrEqual(2);
     expect(loginLogsResponse.status).toBe(200);
     expect(loginLogsPayload.code).toBe(0);
-    expect(loginLogsPayload.data.items.some((item) => item.username === env.seed.adminUsername)).toBe(
-      true,
-    );
+    expect(
+      loginLogsPayload.data.records.some((item) => item.username === env.seed.adminUsername),
+    ).toBe(true);
   });
 
   test('超级管理员可停用后台用户，并写入审计日志', async () => {
@@ -185,7 +185,8 @@ describe('IAM 权限与审计', () => {
     const payload = (await response.json()) as {
       code: number;
       data: {
-        id: string;
+        resourceId: string;
+        resourceType: string;
         status: string;
       };
     };
@@ -208,7 +209,8 @@ describe('IAM 权限与审计', () => {
     expect(response.status).toBe(200);
     expect(payload.code).toBe(0);
     expect(payload.data).toMatchObject({
-      id: 'audit-user-status',
+      resourceId: 'audit-user-status',
+      resourceType: 'ADMIN_USER',
       status: 'DISABLED',
     });
     expect(auditRows[0]).toMatchObject({
@@ -243,7 +245,7 @@ describe('IAM 权限与审计', () => {
       }),
     );
     const auditLogsResponse = await runtime.app.handle(
-      new Request('http://localhost/admin/audit-logs?page=1&pageSize=20', {
+      new Request('http://localhost/admin/audit-logs?pageNum=1&pageSize=20', {
         method: 'GET',
         headers: {
           authorization: await buildAdminAuthorizationHeader('seed-admin-user', ['SUPER_ADMIN']),
@@ -275,7 +277,7 @@ describe('IAM 权限与审计', () => {
     const auditLogsPayload = (await auditLogsResponse.json()) as {
       code: number;
       data: {
-        items: Array<{
+        records: Array<{
           action: string;
           resourceId: string | null;
         }>;
@@ -287,7 +289,7 @@ describe('IAM 权限与审计', () => {
     expect(auditLogsResponse.status).toBe(200);
     expect(auditLogsPayload.code).toBe(0);
     expect(
-      auditLogsPayload.data.items.some(
+      auditLogsPayload.data.records.some(
         (item) =>
           item.action === 'ASSIGN_ADMIN_USER_ROLE' && item.resourceId === 'finance-user-1',
       ),

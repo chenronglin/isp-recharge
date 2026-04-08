@@ -2,13 +2,29 @@ import { Elysia } from 'elysia';
 import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
-import { ok } from '@/lib/http';
+import {
+  buildOperationResult,
+  buildPageResult,
+  createPageResponseSchema,
+  createSuccessResponseSchema,
+  ok,
+  OperationResultSchema,
+  parseOptionalDateTime,
+  parsePagination,
+  parseSort,
+} from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
 import {
   CreateBlackWhiteEntryBodySchema,
   CreateRiskRuleBodySchema,
   PreCheckBodySchema,
+  RiskBlackWhiteEntrySchema,
+  RiskBlackWhiteListQuerySchema,
+  RiskDecisionRecordSchema,
+  RiskDecisionsQuerySchema,
+  RiskRuleSchema,
+  RiskRulesQuerySchema,
 } from '@/modules/risk/risk.schema';
 import type { RiskService } from '@/modules/risk/risk.service';
 
@@ -21,18 +37,48 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
   const adminRoutes = new Elysia({ prefix: '/admin/risk' })
     .get(
       '/rules',
-      async ({ request }) => {
+      async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['RISK']);
-        return ok(requestId, await riskService.listRules());
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(query as Record<string, unknown>, 'priority', 'asc');
+        const result = await riskService.listRules({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          status: typeof query.status === 'string' ? query.status : undefined,
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: RiskRulesQuerySchema,
+        response: createPageResponseSchema(RiskRuleSchema),
         detail: {
           tags: ['admin'],
           summary: '查询风控规则',
           description: '后台查询已配置的风控规则列表，包括阈值、优先级和启用状态。',
+        },
+      },
+    )
+    .get(
+      '/rules/:ruleId',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['RISK']);
+        return ok(requestId, await riskService.getRuleDetail(params.ruleId));
+      },
+      {
+        response: createSuccessResponseSchema(RiskRuleSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询风控规则详情',
+          description: '后台查询单条风控规则详情，查看规则类型、配置与优先级。',
         },
       },
     )
@@ -57,10 +103,23 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
           ip: clientIp,
         });
 
-        return ok(requestId, rule);
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: rule.id,
+            resourceType: 'RISK_RULE',
+            status: rule.status,
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+          }),
+        );
       },
       {
         body: CreateRiskRuleBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '创建风控规则',
@@ -70,14 +129,26 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
     )
     .get(
       '/black-white-lists',
-      async ({ request }) => {
+      async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['RISK']);
-        return ok(requestId, await riskService.listBlackWhiteEntries());
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(query as Record<string, unknown>, 'createdAt', 'desc');
+        const result = await riskService.listBlackWhiteEntries({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          status: typeof query.status === 'string' ? query.status : undefined,
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: RiskBlackWhiteListQuerySchema,
+        response: createPageResponseSchema(RiskBlackWhiteEntrySchema),
         detail: {
           tags: ['admin'],
           summary: '查询黑白名单',
@@ -106,10 +177,24 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
           ip: clientIp,
         });
 
-        return ok(requestId, entry);
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: entry?.id ?? `${body.entryType}:${body.targetValue}`,
+            resourceType: 'RISK_BLACK_WHITE_ENTRY',
+            status: entry?.status ?? 'ACTIVE',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.remark ?? null,
+          }),
+        );
       },
       {
         body: CreateBlackWhiteEntryBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '创建黑白名单条目',
@@ -119,14 +204,28 @@ export function createRiskRoutes({ riskService, iamService }: RiskRoutesDeps) {
     )
     .get(
       '/decisions',
-      async ({ request }) => {
+      async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['RISK']);
-        return ok(requestId, await riskService.listDecisions());
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(query as Record<string, unknown>, 'createdAt', 'desc');
+        const result = await riskService.listDecisions({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          status: typeof query.status === 'string' ? query.status : undefined,
+          startTime: parseOptionalDateTime(query.startTime),
+          endTime: parseOptionalDateTime(query.endTime),
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: RiskDecisionsQuerySchema,
+        response: createPageResponseSchema(RiskDecisionRecordSchema),
         detail: {
           tags: ['admin'],
           summary: '查询风控决策记录',

@@ -48,10 +48,78 @@ export class IamRepository {
     `);
   }
 
-  async listUsers(page: number, pageSize: number): Promise<{ items: AdminUser[]; total: number }> {
-    const offset = (page - 1) * pageSize;
-    const items = await db.unsafe<AdminUser[]>(iamSql.listUsers, [pageSize, offset]);
-    const total = await first<{ total: number }>(db.unsafe(iamSql.countUsers));
+  async listUsers(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: AdminUser[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const keyword = input.keyword?.trim();
+    const status = input.status?.trim();
+    const sortByMap: Record<string, string> = {
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+      lastLoginAt: 'last_login_at',
+      username: 'username',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'created_at';
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (keyword) {
+      params.push(`%${keyword}%`);
+      const index = params.length;
+      whereClauses.push(
+        `(username ILIKE $${index} OR display_name ILIKE $${index} OR COALESCE(email, '') ILIKE $${index})`,
+      );
+    }
+
+    if (status) {
+      params.push(status);
+      whereClauses.push(`status = $${params.length}`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const items = await db.unsafe<AdminUser[]>(
+      `
+        SELECT
+          id,
+          username,
+          password_hash AS "passwordHash",
+          display_name AS "displayName",
+          status,
+          NULL::text AS "departmentId",
+          mobile,
+          email,
+          last_login_at AS "lastLoginAt",
+          failed_login_attempts AS "failedLoginAttempts",
+          locked_until AS "lockedUntil",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM iam.admin_users
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM iam.admin_users
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
 
     return {
       items,
@@ -59,8 +127,75 @@ export class IamRepository {
     };
   }
 
-  async listRoles(): Promise<Role[]> {
-    return db.unsafe<Role[]>(iamSql.listRoles);
+  async listRoles(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: Role[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const keyword = input.keyword?.trim();
+    const status = input.status?.trim();
+    const sortByMap: Record<string, string> = {
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+      roleCode: 'role_code',
+      roleName: 'role_name',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'created_at';
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (keyword) {
+      params.push(`%${keyword}%`);
+      const index = params.length;
+      whereClauses.push(`(role_code ILIKE $${index} OR role_name ILIKE $${index})`);
+    }
+
+    if (status) {
+      params.push(status);
+      whereClauses.push(`status = $${params.length}`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+
+    const items = await db.unsafe<Role[]>(
+      `
+        SELECT
+          id,
+          role_code AS "roleCode",
+          role_name AS "roleName",
+          status,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM iam.roles
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM iam.roles
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items,
+      total: total?.total ?? 0,
+    };
   }
 
   async findRolesByUserId(userId: string): Promise<Role[]> {
@@ -78,6 +213,21 @@ export class IamRepository {
       WHERE urr.user_id = ${userId}
       ORDER BY r.role_code ASC
     `;
+  }
+
+  async findRoleById(roleId: string): Promise<Role | null> {
+    return first<Role>(db<Role[]>`
+      SELECT
+        id,
+        role_code AS "roleCode",
+        role_name AS "roleName",
+        status,
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM iam.roles
+      WHERE id = ${roleId}
+      LIMIT 1
+    `);
   }
 
   async createUser(input: {
@@ -320,31 +470,80 @@ export class IamRepository {
     `;
   }
 
-  async listAuditLogs(
-    page: number,
-    pageSize: number,
-  ): Promise<{ items: AuditLogRecord[]; total: number }> {
-    const offset = (page - 1) * pageSize;
-    const items = await db<AuditLogRecord[]>`
-      SELECT
-        id,
-        operator_user_id AS "operatorUserId",
-        operator_username AS "operatorUsername",
-        action,
-        resource_type AS "resourceType",
-        resource_id AS "resourceId",
-        request_id AS "requestId",
-        ip,
-        details_json AS "detailsJson",
-        created_at AS "createdAt"
-      FROM iam.operation_audit_logs
-      ORDER BY created_at DESC
-      LIMIT ${pageSize} OFFSET ${offset}
-    `;
-    const total = await first<{ total: number }>(db`
-      SELECT COUNT(*)::int AS total
-      FROM iam.operation_audit_logs
-    `);
+  async listAuditLogs(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: AuditLogRecord[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const keyword = input.keyword?.trim();
+    const sortByMap: Record<string, string> = {
+      createdAt: 'created_at',
+      action: 'action',
+      resourceType: 'resource_type',
+      operatorUsername: 'operator_username',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'created_at';
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (keyword) {
+      params.push(`%${keyword}%`);
+      const index = params.length;
+      whereClauses.push(
+        `(operator_username ILIKE $${index} OR action ILIKE $${index} OR resource_type ILIKE $${index} OR COALESCE(resource_id, '') ILIKE $${index})`,
+      );
+    }
+
+    if (input.startTime) {
+      params.push(input.startTime);
+      whereClauses.push(`created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (input.endTime) {
+      params.push(input.endTime);
+      whereClauses.push(`created_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const items = await db.unsafe<AuditLogRecord[]>(
+      `
+        SELECT
+          id,
+          operator_user_id AS "operatorUserId",
+          operator_username AS "operatorUsername",
+          action,
+          resource_type AS "resourceType",
+          resource_id AS "resourceId",
+          request_id AS "requestId",
+          ip,
+          details_json AS "detailsJson",
+          created_at AS "createdAt"
+        FROM iam.operation_audit_logs
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM iam.operation_audit_logs
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
 
     return {
       items,
@@ -352,29 +551,82 @@ export class IamRepository {
     };
   }
 
-  async listLoginLogs(
-    page: number,
-    pageSize: number,
-  ): Promise<{ items: LoginLogRecord[]; total: number }> {
-    const offset = (page - 1) * pageSize;
-    const items = await db<LoginLogRecord[]>`
-      SELECT
-        id,
-        user_id AS "userId",
-        username,
-        ip,
-        device_summary AS "deviceSummary",
-        result,
-        failure_reason AS "failureReason",
-        created_at AS "createdAt"
-      FROM iam.login_logs
-      ORDER BY created_at DESC
-      LIMIT ${pageSize} OFFSET ${offset}
-    `;
-    const total = await first<{ total: number }>(db`
-      SELECT COUNT(*)::int AS total
-      FROM iam.login_logs
-    `);
+  async listLoginLogs(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: LoginLogRecord[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const keyword = input.keyword?.trim();
+    const status = input.status?.trim();
+    const sortByMap: Record<string, string> = {
+      createdAt: 'created_at',
+      username: 'username',
+      result: 'result',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'created_at';
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (keyword) {
+      params.push(`%${keyword}%`);
+      const index = params.length;
+      whereClauses.push(`(username ILIKE $${index} OR ip ILIKE $${index})`);
+    }
+
+    if (status) {
+      params.push(status);
+      whereClauses.push(`result = $${params.length}`);
+    }
+
+    if (input.startTime) {
+      params.push(input.startTime);
+      whereClauses.push(`created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (input.endTime) {
+      params.push(input.endTime);
+      whereClauses.push(`created_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const items = await db.unsafe<LoginLogRecord[]>(
+      `
+        SELECT
+          id,
+          user_id AS "userId",
+          username,
+          ip,
+          device_summary AS "deviceSummary",
+          result,
+          failure_reason AS "failureReason",
+          created_at AS "createdAt"
+        FROM iam.login_logs
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM iam.login_logs
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
 
     return {
       items,

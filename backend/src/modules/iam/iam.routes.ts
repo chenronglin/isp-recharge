@@ -1,15 +1,36 @@
-import { Elysia, t } from 'elysia';
+import { Elysia } from 'elysia';
 import { writeAuditLog } from '@/lib/audit';
 import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { verifyAdminAuthorizationHeader } from '@/lib/auth';
-import { buildPageResult, ok, parsePagination } from '@/lib/http';
+import {
+  buildOperationResult,
+  buildPageResult,
+  createPageResponseSchema,
+  createSuccessResponseSchema,
+  ok,
+  OperationResultSchema,
+  parseOptionalDateTime,
+  parsePagination,
+  parseSort,
+} from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import {
+  AdminAuditLogsQuerySchema,
+  AdminLoginLogsQuerySchema,
+  AdminRolesQuerySchema,
+  AdminUserDetailSchema,
+  AdminUserListItemSchema,
+  AdminUserProfileSchema,
+  AdminUsersQuerySchema,
   AssignAdminUserRoleBodySchema,
+  AuditLogRecordSchema,
   CreateAdminUserBodySchema,
   CreateRoleBodySchema,
+  LoginLogRecordSchema,
   LoginBodySchema,
+  LoginResultSchema,
   RefreshBodySchema,
+  RoleSchema,
   UpdateAdminUserStatusBodySchema,
 } from '@/modules/iam/iam.schema';
 import type { IamService } from '@/modules/iam/iam.service';
@@ -36,7 +57,7 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
       },
       {
         body: LoginBodySchema,
-        response: t.Any(),
+        response: createSuccessResponseSchema(LoginResultSchema),
         detail: {
           tags: ['admin'],
           summary: '管理员账号登录',
@@ -52,11 +73,27 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
       },
       {
         body: RefreshBodySchema,
-        response: t.Any(),
+        response: createSuccessResponseSchema(LoginResultSchema),
         detail: {
           tags: ['admin'],
           summary: '刷新管理员令牌',
           description: '使用刷新令牌换取新的后台访问令牌与新的刷新令牌。',
+        },
+      },
+    )
+    .get(
+      '/me',
+      async ({ request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        return ok(requestId, await iamService.getCurrentAdminProfile(payload.sub));
+      },
+      {
+        response: createSuccessResponseSchema(AdminUserProfileSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询当前登录管理员',
+          description: '返回当前登录管理员的基础信息、状态与角色，供后台初始化会话使用。',
         },
       },
     )
@@ -65,11 +102,23 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
       async ({ body, request }) => {
         const requestId = getRequestIdFromRequest(request);
         await iamService.logout(body.refreshToken);
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: 'current-session',
+            resourceType: 'ADMIN_SESSION',
+            status: 'REVOKED',
+            operator: {
+              userId: 'anonymous',
+              username: 'anonymous',
+              displayName: 'anonymous',
+            },
+          }),
+        );
       },
       {
         body: RefreshBodySchema,
-        response: t.Any(),
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '退出管理员登录',
@@ -86,16 +135,48 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['SUPER_ADMIN']);
-        const { page, pageSize } = parsePagination(query as Record<string, unknown>);
-        const result = await iamService.listUsers(page, pageSize);
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
+        );
+        const result = await iamService.listUsers({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          status: typeof query.status === 'string' ? query.status : undefined,
+          sortBy,
+          sortOrder,
+        });
 
-        return ok(requestId, buildPageResult(result.items, page, pageSize, result.total));
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: AdminUsersQuerySchema,
+        response: createPageResponseSchema(AdminUserListItemSchema),
         detail: {
           tags: ['admin'],
           summary: '查询后台用户列表',
           description: '后台按分页方式查询管理员用户列表，用于账号维护与权限分配。',
+        },
+      },
+    )
+    .get(
+      '/:userId',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['SUPER_ADMIN']);
+        return ok(requestId, await iamService.getUserDetail(params.userId));
+      },
+      {
+        response: createSuccessResponseSchema(AdminUserDetailSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询后台用户详情',
+          description: '后台查询单个管理员账号详情、角色、安全状态和最近登录信息。',
         },
       },
     )
@@ -122,11 +203,23 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
           ip: clientIp,
         });
 
-        return ok(requestId, createdUser);
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: createdUser.id,
+            resourceType: 'ADMIN_USER',
+            status: createdUser.status,
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+          }),
+        );
       },
       {
         body: CreateAdminUserBodySchema,
-        response: t.Any(),
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '创建后台用户',
@@ -157,11 +250,23 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
           ip: clientIp,
         });
 
-        return ok(requestId, updatedUser);
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: updatedUser.id,
+            resourceType: 'ADMIN_USER',
+            status: updatedUser.status,
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+          }),
+        );
       },
       {
         body: UpdateAdminUserStatusBodySchema,
-        response: t.Any(),
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '更新后台用户状态',
@@ -192,11 +297,24 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: params.userId,
+            resourceType: 'ADMIN_USER',
+            status: 'ROLE_ASSIGNED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.roleCode,
+          }),
+        );
       },
       {
         body: AssignAdminUserRoleBodySchema,
-        response: t.Any(),
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '为后台用户分配角色',
@@ -208,18 +326,52 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
   const roleRoutes = new Elysia({ prefix: '/admin/roles' })
     .get(
       '/',
-      async ({ request }) => {
+      async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['SUPER_ADMIN']);
-        return ok(requestId, await iamService.listRoles());
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
+        );
+        const result = await iamService.listRoles({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          status: typeof query.status === 'string' ? query.status : undefined,
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: AdminRolesQuerySchema,
+        response: createPageResponseSchema(RoleSchema),
         detail: {
           tags: ['admin'],
           summary: '查询角色列表',
           description: '查询后台角色定义列表，供用户授权和权限配置使用。',
+        },
+      },
+    )
+    .get(
+      '/:roleId',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['SUPER_ADMIN']);
+        return ok(requestId, await iamService.getRoleDetail(params.roleId));
+      },
+      {
+        response: createSuccessResponseSchema(RoleSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询角色详情',
+          description: '查询后台角色详情，供用户授权和角色管理页展示使用。',
         },
       },
     )
@@ -246,11 +398,23 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
           ip: clientIp,
         });
 
-        return ok(requestId, role);
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: role.id,
+            resourceType: 'ROLE',
+            status: role.status,
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+          }),
+        );
       },
       {
         body: CreateRoleBodySchema,
-        response: t.Any(),
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '创建后台角色',
@@ -267,12 +431,27 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['SUPER_ADMIN']);
-        const { page, pageSize } = parsePagination(query as Record<string, unknown>);
-        const result = await iamService.listAuditLogs(page, pageSize);
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
+        );
+        const result = await iamService.listAuditLogs({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          startTime: parseOptionalDateTime(query.startTime),
+          endTime: parseOptionalDateTime(query.endTime),
+          sortBy,
+          sortOrder,
+        });
 
-        return ok(requestId, buildPageResult(result.items, page, pageSize, result.total));
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: AdminAuditLogsQuerySchema,
+        response: createPageResponseSchema(AuditLogRecordSchema),
         detail: {
           tags: ['admin'],
           summary: '查询操作审计日志',
@@ -287,12 +466,28 @@ export function createIamRoutes({ iamService }: IamRoutesDeps) {
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['SUPER_ADMIN']);
-        const { page, pageSize } = parsePagination(query as Record<string, unknown>);
-        const result = await iamService.listLoginLogs(page, pageSize);
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
+        );
+        const result = await iamService.listLoginLogs({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          status: typeof query.status === 'string' ? query.status : undefined,
+          startTime: parseOptionalDateTime(query.startTime),
+          endTime: parseOptionalDateTime(query.endTime),
+          sortBy,
+          sortOrder,
+        });
 
-        return ok(requestId, buildPageResult(result.items, page, pageSize, result.total));
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: AdminLoginLogsQuerySchema,
+        response: createPageResponseSchema(LoginLogRecordSchema),
         detail: {
           tags: ['admin'],
           summary: '查询后台登录日志',

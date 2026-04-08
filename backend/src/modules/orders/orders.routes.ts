@@ -2,14 +2,29 @@ import { Elysia } from 'elysia';
 import type { AuditInput } from '@/lib/audit';
 import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
-import { ok } from '@/lib/http';
+import {
+  buildOperationResult,
+  buildPageResult,
+  createPageResponseSchema,
+  createSuccessResponseSchema,
+  ok,
+  OperationResultSchema,
+  parseOptionalDateTime,
+  parsePagination,
+  parseSort,
+} from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import { stableStringify } from '@/lib/utils';
 import type { ChannelsService } from '@/modules/channels/channels.service';
 import type { IamService } from '@/modules/iam/iam.service';
 import {
+  ActionReasonBodySchema,
+  AdminOrderDetailSchema,
+  AdminOrderEventSchema,
+  AdminOrderListItemSchema,
   CreateOrderBodySchema,
   MarkExceptionBodySchema,
+  OrderEventsQuerySchema,
   OrderAdminListQuerySchema,
   RemarkBodySchema,
 } from '@/modules/orders/orders.schema';
@@ -130,17 +145,38 @@ export function createOrdersRoutes({
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
-        return ok(
-          requestId,
-          await ordersService.listOrders({
-            orderNo: query.orderNo,
-            mobile: query.mobile,
-            supplierOrderNo: query.supplierOrderNo,
-          }),
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
         );
+        const result = await ordersService.listOrders({
+          pageNum,
+          pageSize,
+          keyword: query.keyword,
+          status: query.status,
+          startTime: parseOptionalDateTime(query.startTime),
+          endTime: parseOptionalDateTime(query.endTime),
+          sortBy,
+          sortOrder,
+          orderNo: query.orderNo,
+          channelOrderNo: query.channelOrderNo,
+          mobile: query.mobile,
+          channelId: query.channelId,
+          productId: query.productId,
+          mainStatus: query.mainStatus,
+          supplierStatus: query.supplierStatus,
+          notifyStatus: query.notifyStatus,
+          refundStatus: query.refundStatus,
+          exceptionTag: query.exceptionTag,
+          supplierOrderNo: query.supplierOrderNo,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
         query: OrderAdminListQuerySchema,
+        response: createPageResponseSchema(AdminOrderListItemSchema),
         detail: {
           tags: ['admin'],
           summary: '查询后台订单列表',
@@ -155,9 +191,10 @@ export function createOrdersRoutes({
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
-        return ok(requestId, await ordersService.getOrderByNo(params.orderNo));
+        return ok(requestId, await ordersService.getAdminOrderDetail(params.orderNo));
       },
       {
+        response: createSuccessResponseSchema(AdminOrderDetailSchema),
         detail: {
           tags: ['admin'],
           summary: '查询后台订单详情',
@@ -167,14 +204,30 @@ export function createOrdersRoutes({
     )
     .get(
       '/:orderNo/events',
-      async ({ params, request }) => {
+      async ({ params, query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
-        return ok(requestId, await ordersService.listEvents(params.orderNo));
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'occurredAt',
+          'asc',
+        );
+        const result = await ordersService.listEvents(params.orderNo, {
+          pageNum,
+          pageSize,
+          startTime: parseOptionalDateTime(query.startTime),
+          endTime: parseOptionalDateTime(query.endTime),
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: OrderEventsQuerySchema,
+        response: createPageResponseSchema(AdminOrderEventSchema),
         detail: {
           tags: ['admin'],
           summary: '查询后台订单事件',
@@ -184,7 +237,7 @@ export function createOrdersRoutes({
     )
     .post(
       '/:orderNo/close',
-      async ({ params, request }) => {
+      async ({ params, body, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
@@ -200,14 +253,30 @@ export function createOrdersRoutes({
           resourceId: params.orderNo,
           details: {
             orderNo: params.orderNo,
+            reason: body.reason,
           },
           requestId,
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: params.orderNo,
+            resourceType: 'ORDER',
+            status: 'CLOSED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.reason,
+          }),
+        );
       },
       {
+        body: ActionReasonBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '关闭订单',
@@ -234,15 +303,30 @@ export function createOrdersRoutes({
           details: {
             orderNo: params.orderNo,
             exceptionTag: body.exceptionTag,
+            reason: body.reason,
           },
           requestId,
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: params.orderNo,
+            resourceType: 'ORDER',
+            status: 'EXCEPTION_MARKED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.reason,
+          }),
+        );
       },
       {
         body: MarkExceptionBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '标记订单异常',
@@ -274,10 +358,24 @@ export function createOrdersRoutes({
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: params.orderNo,
+            resourceType: 'ORDER',
+            status: 'REMARK_ADDED',
+            operator: {
+              userId: admin.userId,
+              username: admin.username,
+              displayName: admin.displayName,
+            },
+            remark: body.remark,
+          }),
+        );
       },
       {
         body: RemarkBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '追加订单备注',
@@ -287,7 +385,7 @@ export function createOrdersRoutes({
     )
     .post(
       '/:orderNo/retry-notify',
-      async ({ params, request }) => {
+      async ({ params, body, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const clientIp = getClientIpFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
@@ -303,14 +401,30 @@ export function createOrdersRoutes({
           resourceId: params.orderNo,
           details: {
             orderNo: params.orderNo,
+            reason: body.reason,
           },
           requestId,
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: params.orderNo,
+            resourceType: 'ORDER',
+            status: 'NOTIFICATION_RETRY_REQUESTED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.reason,
+          }),
+        );
       },
       {
+        body: ActionReasonBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '重试订单通知',

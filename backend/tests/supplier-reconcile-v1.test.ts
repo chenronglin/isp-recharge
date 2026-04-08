@@ -157,6 +157,7 @@ test('日对账任务会持久化平台退款但供应商成功的差异', async
 
   expect(runtime.services.worker.listRegisteredJobTypes().sort()).toEqual([
     'notification.deliver',
+    'order.refund.retry',
     'order.timeout.scan',
     'supplier.catalog.delta-sync',
     'supplier.catalog.full-sync',

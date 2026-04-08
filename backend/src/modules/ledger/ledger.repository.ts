@@ -25,14 +25,186 @@ export class LedgerRepository {
     };
   }
 
-  async listAccounts(): Promise<Account[]> {
-    const rows = await db.unsafe<Account[]>(ledgerSql.listAccounts);
-    return rows.map((row) => this.mapAccount(row));
+  async listAccounts(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: Account[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const sortByMap: Record<string, string> = {
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+      ownerId: 'owner_id',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'created_at';
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(`(owner_type ILIKE $${index} OR owner_id ILIKE $${index})`);
+    }
+
+    if (input.status?.trim()) {
+      params.push(input.status.trim());
+      whereClauses.push(`status = $${params.length}`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+
+    const rows = await db.unsafe<Account[]>(
+      `
+        SELECT
+          id,
+          owner_type AS "ownerType",
+          owner_id AS "ownerId",
+          available_balance AS "availableBalance",
+          frozen_balance AS "frozenBalance",
+          currency,
+          status,
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM ledger.accounts
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM ledger.accounts
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => this.mapAccount(row)),
+      total: total?.total ?? 0,
+    };
   }
 
-  async listLedgerEntries(): Promise<LedgerEntry[]> {
-    const rows = await db.unsafe<LedgerEntry[]>(ledgerSql.listEntries);
-    return rows.map((row) => this.mapLedgerEntry(row));
+  async listLedgerEntries(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    accountId?: string;
+    orderNo?: string;
+    channelId?: string;
+    entryType?: string;
+    bizNo?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: LedgerEntry[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const sortByMap: Record<string, string> = {
+      createdAt: 'ledgers.created_at',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'ledgers.created_at';
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(
+        `(ledgers.order_no ILIKE $${index} OR ledgers.reference_no ILIKE $${index} OR ledgers.action_type ILIKE $${index})`,
+      );
+    }
+
+    const exactConditions: Array<[string, string | undefined]> = [
+      ['ledgers.account_id', input.accountId],
+      ['ledgers.order_no', input.orderNo],
+      ['ledgers.action_type', input.entryType],
+      ['ledgers.reference_no', input.bizNo],
+      ['accounts.owner_id', input.channelId],
+    ];
+
+    for (const [column, value] of exactConditions) {
+      if (!value?.trim()) {
+        continue;
+      }
+
+      params.push(value.trim());
+      whereClauses.push(`${column} = $${params.length}`);
+    }
+
+    if (input.channelId?.trim()) {
+      whereClauses[whereClauses.length - 1] = `(accounts.owner_type = 'CHANNEL' AND accounts.owner_id = $${params.length})`;
+    }
+
+    if (input.startTime) {
+      params.push(input.startTime);
+      whereClauses.push(`ledgers.created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (input.endTime) {
+      params.push(input.endTime);
+      whereClauses.push(`ledgers.created_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+
+    const rows = await db.unsafe<LedgerEntry[]>(
+      `
+        SELECT
+          ledgers.id,
+          ledgers.ledger_no AS "ledgerNo",
+          ledgers.account_id AS "accountId",
+          ledgers.order_no AS "orderNo",
+          ledgers.action_type AS "actionType",
+          ledgers.direction,
+          ledgers.amount,
+          ledgers.currency,
+          ledgers.balance_before AS "balanceBefore",
+          ledgers.balance_after AS "balanceAfter",
+          ledgers.reference_type AS "referenceType",
+          ledgers.reference_no AS "referenceNo",
+          ledgers.created_at AS "createdAt"
+        FROM ledger.account_ledgers AS ledgers
+        INNER JOIN ledger.accounts AS accounts
+          ON accounts.id = ledgers.account_id
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, ledgers.id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM ledger.account_ledgers AS ledgers
+          INNER JOIN ledger.accounts AS accounts
+            ON accounts.id = ledgers.account_id
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => this.mapLedgerEntry(row)),
+      total: total?.total ?? 0,
+    };
   }
 
   async findLedgerEntryById(entryId: string): Promise<LedgerEntry | null> {
@@ -72,6 +244,26 @@ export class LedgerRepository {
       FROM ledger.accounts
       WHERE owner_type = ${ownerType}
         AND owner_id = ${ownerId}
+      LIMIT 1
+    `);
+
+    return row ? this.mapAccount(row) : null;
+  }
+
+  async findAccountById(accountId: string): Promise<Account | null> {
+    const row = await first<Account>(db<Account[]>`
+      SELECT
+        id,
+        owner_type AS "ownerType",
+        owner_id AS "ownerId",
+        available_balance AS "availableBalance",
+        frozen_balance AS "frozenBalance",
+        currency,
+        status,
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM ledger.accounts
+      WHERE id = ${accountId}
       LIMIT 1
     `);
 

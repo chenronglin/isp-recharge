@@ -1,16 +1,79 @@
 import { generateId } from '@/lib/id';
 import { db, first } from '@/lib/sql';
 import { parseJsonValue } from '@/lib/utils';
-import { riskSql } from '@/modules/risk/risk.sql';
 import type { RiskDecisionRecord, RiskRule } from '@/modules/risk/risk.types';
 
 export class RiskRepository {
-  async listRules(): Promise<RiskRule[]> {
-    const rows = await db.unsafe<RiskRule[]>(riskSql.listRules);
-    return rows.map((row) => ({
-      ...row,
-      configJson: parseJsonValue(row.configJson, {}),
-    }));
+  async listRules(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: RiskRule[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const sortByMap: Record<string, string> = {
+      priority: 'priority',
+      createdAt: 'created_at',
+      ruleCode: 'rule_code',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'priority';
+    const orderDirection = input.sortOrder === 'desc' ? 'DESC' : 'ASC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(`(rule_code ILIKE $${index} OR rule_name ILIKE $${index} OR rule_type ILIKE $${index})`);
+    }
+
+    if (input.status?.trim()) {
+      params.push(input.status.trim());
+      whereClauses.push(`status = $${params.length}`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+
+    const rows = await db.unsafe<RiskRule[]>(
+      `
+        SELECT
+          id,
+          rule_code AS "ruleCode",
+          rule_name AS "ruleName",
+          rule_type AS "ruleType",
+          config_json AS "configJson",
+          priority,
+          status
+        FROM risk.risk_rules
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM risk.risk_rules
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => ({
+        ...row,
+        configJson: parseJsonValue(row.configJson, {}),
+      })),
+      total: total?.total ?? 0,
+    };
   }
 
   async createRule(input: {
@@ -65,16 +128,81 @@ export class RiskRepository {
     };
   }
 
-  async listBlackWhiteEntries(): Promise<
-    {
+  async listBlackWhiteEntries(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{
+    items: {
       id: string;
       entryType: string;
       targetValue: string;
       listType: string;
       status: string;
-    }[]
-  > {
-    return db.unsafe(riskSql.listBlackWhite);
+    }[];
+    total: number;
+  }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(`(entry_type ILIKE $${index} OR target_value ILIKE $${index} OR list_type ILIKE $${index})`);
+    }
+
+    if (input.status?.trim()) {
+      params.push(input.status.trim());
+      whereClauses.push(`status = $${params.length}`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const items = await db.unsafe<
+      {
+        id: string;
+        entryType: string;
+        targetValue: string;
+        listType: string;
+        status: string;
+      }[]
+    >(
+      `
+        SELECT
+          id,
+          entry_type AS "entryType",
+          target_value AS "targetValue",
+          list_type AS "listType",
+          status
+        FROM risk.risk_black_white_list
+        ${whereSql}
+        ORDER BY created_at ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM risk.risk_black_white_list
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items,
+      total: total?.total ?? 0,
+    };
   }
 
   async createBlackWhiteEntry(input: {
@@ -176,26 +304,106 @@ export class RiskRepository {
     return Number(row?.total ?? 0);
   }
 
-  async listDecisions(): Promise<RiskDecisionRecord[]> {
-    const rows = await db<RiskDecisionRecord[]>`
+  async listDecisions(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: RiskDecisionRecord[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(`(COALESCE(order_no, '') ILIKE $${index} OR COALESCE(channel_id, '') ILIKE $${index} OR reason ILIKE $${index})`);
+    }
+
+    if (input.status?.trim()) {
+      params.push(input.status.trim());
+      whereClauses.push(`decision = $${params.length}`);
+    }
+
+    if (input.startTime) {
+      params.push(input.startTime);
+      whereClauses.push(`created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (input.endTime) {
+      params.push(input.endTime);
+      whereClauses.push(`created_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const rows = await db.unsafe<RiskDecisionRecord[]>(
+      `
+        SELECT
+          id,
+          order_no AS "orderNo",
+          channel_id AS "channelId",
+          decision,
+          reason,
+          hit_rules_json AS "hitRules",
+          context_json AS "contextJson",
+          created_at AS "createdAt"
+        FROM risk.risk_decisions
+        ${whereSql}
+        ORDER BY created_at ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM risk.risk_decisions
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => ({
+        ...row,
+        hitRules: parseJsonValue(row.hitRules, []),
+        contextJson: parseJsonValue(row.contextJson, {}),
+      })),
+      total: total?.total ?? 0,
+    };
+  }
+
+  async findRuleById(ruleId: string): Promise<RiskRule | null> {
+    const row = await first<RiskRule>(db<RiskRule[]>`
       SELECT
         id,
-        order_no AS "orderNo",
-        channel_id AS "channelId",
-        decision,
-        reason,
-        hit_rules_json AS "hitRules",
-        context_json AS "contextJson",
-        created_at AS "createdAt"
-      FROM risk.risk_decisions
-      ORDER BY created_at DESC, id DESC
-    `;
+        rule_code AS "ruleCode",
+        rule_name AS "ruleName",
+        rule_type AS "ruleType",
+        config_json AS "configJson",
+        priority,
+        status
+      FROM risk.risk_rules
+      WHERE id = ${ruleId}
+      LIMIT 1
+    `);
 
-    return rows.map((row) => ({
-      ...row,
-      hitRules: parseJsonValue(row.hitRules, []),
-      contextJson: parseJsonValue(row.contextJson, {}),
-    }));
+    return row
+      ? {
+          ...row,
+          configJson: parseJsonValue(row.configJson, {}),
+        }
+      : null;
   }
 
   async addDecision(input: {

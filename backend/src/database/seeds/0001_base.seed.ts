@@ -338,6 +338,23 @@ export async function runSeed(db: SQL): Promise<void> {
   const shenzhenKefeiCallbackSecret = encryptText('F29C80BB80EA32D4');
 
   await db.begin(async (tx) => {
+    await tx.unsafe(`
+      ALTER TABLE iam.admin_users
+        ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
+
+      CREATE TABLE IF NOT EXISTS iam.login_logs (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NULL REFERENCES iam.admin_users(id),
+        username TEXT NOT NULL,
+        ip TEXT NOT NULL,
+        device_summary TEXT NOT NULL DEFAULT '',
+        result TEXT NOT NULL,
+        failure_reason TEXT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      );
+    `);
+
     await tx`
       INSERT INTO iam.admin_users (
         id,

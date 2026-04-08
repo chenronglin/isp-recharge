@@ -1,5 +1,6 @@
 import { badRequest, forbidden, notFound } from '@/lib/errors';
 import { eventBus } from '@/lib/event-bus';
+import { toAmountFen, toIsoDateTime } from '@/lib/utils';
 import type { ChannelContract } from '@/modules/channels/contracts';
 import type { LedgerContract } from '@/modules/ledger/contracts';
 import { NotificationsRepository } from '@/modules/notifications/notifications.repository';
@@ -9,6 +10,7 @@ import type { OrdersRepository } from '@/modules/orders/orders.repository';
 import type {
   OpenOrderEventRecord,
   OpenOrderRecord,
+  OrderEventListFilters,
   OrderEventRecord,
   OrderListFilters,
   OrderRecord,
@@ -48,8 +50,54 @@ export class OrdersService implements OrderContract {
     this.notificationsRepository = notificationsRepository;
   }
 
+  private toAdminOrderListItem(order: OrderRecord) {
+    return {
+      orderNo: order.orderNo,
+      channelOrderNo: order.channelOrderNo,
+      channelId: order.channelId,
+      productId: order.matchedProductId,
+      mobile: order.mobile,
+      province: order.province,
+      ispName: order.ispName,
+      requestedProductType: order.requestedProductType,
+      faceValueAmountFen: toAmountFen(order.faceValue) ?? 0,
+      saleAmountFen: toAmountFen(order.salePrice) ?? 0,
+      purchaseAmountFen: toAmountFen(order.purchasePrice) ?? 0,
+      currency: order.currency,
+      mainStatus: order.mainStatus,
+      supplierStatus: order.supplierStatus,
+      notifyStatus: order.notifyStatus,
+      refundStatus: order.refundStatus,
+      monitorStatus: order.monitorStatus,
+      exceptionTag: order.exceptionTag,
+      createdAt: toIsoDateTime(order.createdAt) ?? order.createdAt,
+      updatedAt: toIsoDateTime(order.updatedAt) ?? order.updatedAt,
+      finishedAt: toIsoDateTime(order.finishedAt),
+    };
+  }
+
+  private toAdminOrderEventRecord(event: OrderEventRecord) {
+    return {
+      id: event.id,
+      orderNo: event.orderNo,
+      eventType: event.eventType,
+      sourceService: event.sourceService,
+      sourceNo: event.sourceNo,
+      beforeStatus: event.beforeStatusJson,
+      afterStatus: event.afterStatusJson,
+      payload: event.payloadJson,
+      operator: event.operator,
+      occurredAt: toIsoDateTime(event.occurredAt) ?? event.occurredAt,
+    };
+  }
+
   async listOrders(filters: OrderListFilters = {}) {
-    return this.repository.listOrders(filters);
+    const result = await this.repository.listOrders(filters);
+
+    return {
+      items: result.items.map((item) => this.toAdminOrderListItem(item)),
+      total: result.total,
+    };
   }
 
   async getOrderByNo(orderNo: string): Promise<OrderRecord> {
@@ -60,6 +108,88 @@ export class OrdersService implements OrderContract {
     }
 
     return order;
+  }
+
+  async getAdminOrderDetail(orderNo: string) {
+    const order = await this.getOrderByNo(orderNo);
+    const latestTask = await this.notificationsRepository.findLatestTaskByOrderNo(orderNo);
+    const callbackSnapshot = order.callbackSnapshotJson.callbackConfig as Record<string, unknown> | undefined;
+    const riskSnapshot = order.riskSnapshotJson as Record<string, unknown>;
+    const grossProfitAmountFen =
+      toAmountFen(Number(order.salePrice) - Number(order.purchasePrice)) ?? 0;
+
+    return {
+      basicInfo: {
+        orderNo: order.orderNo,
+        channelOrderNo: order.channelOrderNo,
+        channelId: order.channelId,
+        mobile: order.mobile,
+        province: order.province,
+        ispName: order.ispName,
+        productId: order.matchedProductId,
+        requestedProductType: order.requestedProductType,
+        faceValueAmountFen: toAmountFen(order.faceValue) ?? 0,
+        createdAt: toIsoDateTime(order.createdAt) ?? order.createdAt,
+        updatedAt: toIsoDateTime(order.updatedAt) ?? order.updatedAt,
+        finishedAt: toIsoDateTime(order.finishedAt),
+      },
+      paymentInfo: {
+        currency: order.currency,
+        saleAmountFen: toAmountFen(order.salePrice) ?? 0,
+        purchaseAmountFen: toAmountFen(order.purchasePrice) ?? 0,
+        grossProfitAmountFen,
+        paymentStatus: order.paymentStatus ?? null,
+        refundStatus: order.refundStatus,
+      },
+      fulfillmentInfo: {
+        mainStatus: order.mainStatus,
+        supplierStatus: order.supplierStatus,
+        monitorStatus: order.monitorStatus,
+        warningDeadlineAt: toIsoDateTime(order.warningDeadlineAt),
+        expireDeadlineAt: toIsoDateTime(order.expireDeadlineAt),
+        exceptionTag: order.exceptionTag,
+        remark: order.remark,
+      },
+      notificationInfo: {
+        notifyStatus: order.notifyStatus,
+        latestTaskNo: latestTask?.taskNo ?? null,
+        latestTaskStatus: latestTask?.status ?? null,
+        latestTaskLastError: latestTask?.lastError ?? null,
+        callbackUrl:
+          typeof callbackSnapshot?.callbackUrl === 'string' ? callbackSnapshot.callbackUrl : null,
+        retryEnabled:
+          typeof callbackSnapshot?.retryEnabled === 'boolean'
+            ? callbackSnapshot.retryEnabled
+            : null,
+        timeoutSeconds:
+          typeof callbackSnapshot?.timeoutSeconds === 'number'
+            ? callbackSnapshot.timeoutSeconds
+            : null,
+      },
+      riskInfo: {
+        decision: typeof riskSnapshot.decision === 'string' ? riskSnapshot.decision : null,
+        reason: typeof riskSnapshot.reason === 'string' ? riskSnapshot.reason : null,
+        hitRules: Array.isArray(riskSnapshot.hitRules)
+          ? riskSnapshot.hitRules.filter((item): item is string => typeof item === 'string')
+          : [],
+        snapshot: order.riskSnapshotJson,
+      },
+      ledgerInfo: {
+        currency: order.currency,
+        saleAmountFen: toAmountFen(order.salePrice) ?? 0,
+        purchaseAmountFen: toAmountFen(order.purchasePrice) ?? 0,
+        grossProfitAmountFen,
+        refundStatus: order.refundStatus,
+      },
+      businessSnapshot: {
+        channel: order.channelSnapshotJson,
+        product: order.productSnapshotJson,
+        callback: order.callbackSnapshotJson,
+        supplierRoute: order.supplierRouteSnapshotJson,
+        risk: order.riskSnapshotJson,
+        ext: order.extJson,
+      },
+    };
   }
 
   async getOrderByNoForChannel(channelId: string, orderNo: string): Promise<OrderRecord> {
@@ -84,13 +214,24 @@ export class OrdersService implements OrderContract {
     return this.getOrderByNo(orderNo);
   }
 
-  async listEvents(orderNo: string) {
-    return this.repository.listEvents(orderNo);
+  async listEvents(orderNo: string, filters: OrderEventListFilters = {}) {
+    const result = await this.repository.listEvents(orderNo, filters);
+
+    return {
+      items: result.items.map((item) => this.toAdminOrderEventRecord(item)),
+      total: result.total,
+    };
   }
 
   async listEventsForChannel(channelId: string, orderNo: string) {
     await this.getOrderByNoForChannel(channelId, orderNo);
-    return this.repository.listEvents(orderNo);
+    const result = await this.repository.listEvents(orderNo, {
+      pageNum: 1,
+      pageSize: 200,
+      sortBy: 'occurredAt',
+      sortOrder: 'asc',
+    });
+    return result.items;
   }
 
   toOpenOrderRecord(order: OrderRecord): OpenOrderRecord {
@@ -355,9 +496,17 @@ export class OrdersService implements OrderContract {
       requestId: currentOrder.requestId,
     });
 
-    await this.refundPendingOrder(currentOrder, {
-      throwOnFailure: false,
-    });
+    await this.refundPendingOrder(
+      {
+        ...currentOrder,
+        mainStatus: 'REFUNDING',
+        supplierStatus: 'FAIL',
+        refundStatus: 'PENDING',
+      },
+      {
+        throwOnFailure: false,
+      },
+    );
   }
 
   async retryNotification(orderNo: string) {

@@ -4,15 +4,59 @@ import { generateBusinessNo } from '@/lib/id';
 import { signJwt } from '@/lib/jwt-token';
 import { hashPassword, hashToken, verifyPassword } from '@/lib/security';
 import { addDays } from '@/lib/time';
+import { toIsoDateTime } from '@/lib/utils';
 import type { IamContract } from '@/modules/iam/contracts';
 import type { IamRepository } from '@/modules/iam/iam.repository';
-import type { AdminContext, LoginResult } from '@/modules/iam/iam.types';
+import type {
+  AdminContext,
+  AdminUserDetail,
+  AdminUserListItem,
+  AdminUserProfile,
+  LoginResult,
+} from '@/modules/iam/iam.types';
 
 const loginFailureLockThreshold = 5;
 const loginFailureLockMinutes = 15;
 
 export class IamService implements IamContract {
   constructor(private readonly repository: IamRepository) {}
+
+  private async buildAdminUserProfile(userId: string): Promise<AdminUserProfile> {
+    const user = await this.repository.findUserById(userId);
+
+    if (!user) {
+      throw unauthorized('账号不存在');
+    }
+
+    const roles = await this.repository.findRolesByUserId(user.id);
+
+    return {
+      id: user.id,
+      username: user.username,
+      displayName: user.displayName,
+      status: user.status,
+      roleCodes: roles.map((role) => role.roleCode),
+    };
+  }
+
+  private async toAdminUserListItem(userId: string): Promise<AdminUserListItem> {
+    const user = await this.repository.findUserById(userId);
+
+    if (!user) {
+      throw unauthorized('账号不存在');
+    }
+
+    const profile = await this.buildAdminUserProfile(user.id);
+
+    return {
+      ...profile,
+      email: user.email,
+      mobile: user.mobile,
+      lastLoginAt: user.lastLoginAt,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
 
   async login(input: {
     username: string;
@@ -113,13 +157,7 @@ export class IamService implements IamContract {
       accessToken,
       refreshToken,
       expiresInSeconds: env.adminAccessTokenExpiresInSeconds,
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        status: user.status,
-        roleCodes,
-      },
+      user: await this.buildAdminUserProfile(user.id),
     };
   }
 
@@ -163,13 +201,7 @@ export class IamService implements IamContract {
       accessToken,
       refreshToken: nextRefreshToken,
       expiresInSeconds: env.adminAccessTokenExpiresInSeconds,
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.displayName,
-        status: user.status,
-        roleCodes,
-      },
+      user: await this.buildAdminUserProfile(user.id),
     };
   }
 
@@ -178,6 +210,7 @@ export class IamService implements IamContract {
   }
 
   async requireActiveAdmin(userId: string): Promise<AdminContext> {
+    const profile = await this.buildAdminUserProfile(userId);
     const user = await this.repository.findUserById(userId);
 
     if (!user) {
@@ -188,30 +221,109 @@ export class IamService implements IamContract {
       throw forbidden('账号已禁用');
     }
 
-    const roles = await this.repository.findRolesByUserId(user.id);
-
     return {
-      userId: user.id,
-      username: user.username,
-      displayName: user.displayName,
-      roleCodes: roles.map((role) => role.roleCode),
+      userId: profile.id,
+      username: profile.username,
+      displayName: profile.displayName,
+      roleCodes: profile.roleCodes,
     };
   }
 
-  async listUsers(page: number, pageSize: number) {
-    return this.repository.listUsers(page, pageSize);
+  async getCurrentAdminProfile(userId: string): Promise<AdminUserProfile> {
+    return this.buildAdminUserProfile(userId);
   }
 
-  async listAuditLogs(page: number, pageSize: number) {
-    return this.repository.listAuditLogs(page, pageSize);
+  async listUsers(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listUsers(input);
+    const items = await Promise.all(result.items.map((item) => this.toAdminUserListItem(item.id)));
+
+    return {
+      items,
+      total: result.total,
+    };
   }
 
-  async listLoginLogs(page: number, pageSize: number) {
-    return this.repository.listLoginLogs(page, pageSize);
+  async getUserDetail(userId: string): Promise<AdminUserDetail> {
+    const user = await this.repository.findUserById(userId);
+
+    if (!user) {
+      throw badRequest('用户不存在');
+    }
+
+    const base = await this.toAdminUserListItem(user.id);
+
+    return {
+      ...base,
+      failedLoginAttempts: user.failedLoginAttempts,
+      lockedUntil: user.lockedUntil,
+    };
   }
 
-  async listRoles() {
-    return this.repository.listRoles();
+  async listAuditLogs(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listAuditLogs(input);
+    return {
+      items: result.items.map((item) => ({
+        ...item,
+        createdAt: toIsoDateTime(item.createdAt) ?? item.createdAt,
+      })),
+      total: result.total,
+    };
+  }
+
+  async listLoginLogs(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listLoginLogs(input);
+    return {
+      items: result.items.map((item) => ({
+        ...item,
+        createdAt: toIsoDateTime(item.createdAt) ?? item.createdAt,
+      })),
+      total: result.total,
+    };
+  }
+
+  async listRoles(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    return this.repository.listRoles(input);
+  }
+
+  async getRoleDetail(roleId: string) {
+    const role = await this.repository.findRoleById(roleId);
+
+    if (!role) {
+      throw badRequest('角色不存在');
+    }
+
+    return role;
   }
 
   async createUser(input: {
@@ -237,8 +349,13 @@ export class IamService implements IamContract {
   }
 
   async createRole(roleCode: string, roleName: string) {
-    const roles = await this.repository.listRoles();
-    const duplicate = roles.find((role) => role.roleCode === roleCode);
+    const roles = await this.repository.listRoles({
+      pageNum: 1,
+      pageSize: 100,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+    const duplicate = roles.items.find((role) => role.roleCode === roleCode);
 
     if (duplicate) {
       throw conflict('角色编码已存在');
@@ -254,8 +371,13 @@ export class IamService implements IamContract {
       throw badRequest('用户不存在');
     }
 
-    const roles = await this.repository.listRoles();
-    const role = roles.find((item) => item.roleCode === roleCode);
+    const roles = await this.repository.listRoles({
+      pageNum: 1,
+      pageSize: 100,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+    const role = roles.items.find((item) => item.roleCode === roleCode);
 
     if (!role) {
       throw badRequest('角色不存在');

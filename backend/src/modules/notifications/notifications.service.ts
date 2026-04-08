@@ -1,8 +1,11 @@
 import { badRequest, notFound } from '@/lib/errors';
 import { eventBus } from '@/lib/event-bus';
 import { decryptText, signOpenApiPayload } from '@/lib/security';
+import { toIsoDateTime } from '@/lib/utils';
 import type { NotificationsRepository } from '@/modules/notifications/notifications.repository';
 import type {
+  NotificationDeadLetter,
+  NotificationDeliveryLog,
   NotificationTaskType,
   NotificationTriggerReason,
 } from '@/modules/notifications/notifications.types';
@@ -39,8 +42,54 @@ export class NotificationsService {
     private readonly workerContract: WorkerContract,
   ) {}
 
-  async listTasks() {
-    return this.repository.listTasks();
+  private toTaskListItem(task: {
+    taskNo: string;
+    orderNo: string;
+    channelId: string;
+    notifyType: string;
+    destination: string;
+    status: string;
+    attemptCount: number;
+    maxAttempts: number;
+    lastError: string | null;
+    nextRetryAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+  }) {
+    return {
+      taskNo: task.taskNo,
+      orderNo: task.orderNo,
+      channelId: task.channelId,
+      notifyType: task.notifyType,
+      destination: task.destination,
+      status: task.status,
+      attemptCount: task.attemptCount,
+      maxAttempts: task.maxAttempts,
+      lastError: task.lastError,
+      nextRetryAt: toIsoDateTime(task.nextRetryAt),
+      createdAt: toIsoDateTime(task.createdAt) ?? task.createdAt,
+      updatedAt: toIsoDateTime(task.updatedAt) ?? task.updatedAt,
+    };
+  }
+
+  async listTasks(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    taskNo?: string;
+    bizNo?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listTasks(input);
+
+    return {
+      items: result.items.map((item) => this.toTaskListItem(item)),
+      total: result.total,
+    };
   }
 
   async getTaskDetail(taskNo: string) {
@@ -50,14 +99,58 @@ export class NotificationsService {
       throw notFound('通知任务不存在');
     }
 
+    const recentLogs = await this.repository.listRecentDeliveryLogsByTaskNo(taskNo, 20);
+    const latestDelivery = recentLogs[0] ?? null;
+
     return {
-      task,
-      recentDeliveries: await this.repository.listRecentDeliveryLogsByTaskNo(taskNo),
+      basicInfo: this.toTaskListItem(task),
+      deliverySummary: {
+        latestDeliveryAt: latestDelivery ? (toIsoDateTime(latestDelivery.createdAt) ?? latestDelivery.createdAt) : null,
+        latestResponseStatus: latestDelivery?.responseStatus ?? null,
+        successCount: recentLogs.filter((item) => item.success).length,
+        failureCount: recentLogs.filter((item) => !item.success).length,
+      },
+      payloadSnapshot: task.payloadJson,
     };
   }
 
-  async listDeadLetters() {
-    return this.repository.listDeadLetters();
+  async listDeliveryLogs(input: {
+    taskNo: string;
+    pageNum: number;
+    pageSize: number;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listDeliveryLogs(input);
+
+    return {
+      items: result.items.map((item) => ({
+        ...item,
+        createdAt: toIsoDateTime(item.createdAt) ?? item.createdAt,
+      })),
+      total: result.total,
+    };
+  }
+
+  async listDeadLetters(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listDeadLetters(input);
+
+    return {
+      items: result.items.map((item) => ({
+        ...item,
+        createdAt: toIsoDateTime(item.createdAt) ?? item.createdAt,
+      })),
+      total: result.total,
+    };
   }
 
   async handleNotificationRequested(input: {

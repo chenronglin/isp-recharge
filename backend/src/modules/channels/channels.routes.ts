@@ -1,11 +1,25 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
-import { ok } from '@/lib/http';
+import {
+  buildOperationResult,
+  buildPageResult,
+  createPageResponseSchema,
+  createSuccessResponseSchema,
+  ok,
+  OperationResultSchema,
+  parsePagination,
+  parseSort,
+} from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import { stableStringify } from '@/lib/utils';
 import {
+  ChannelCallbackConfigSchema,
+  ChannelCredentialSchema,
+  ChannelOrderPolicySchema,
+  ChannelsListQuerySchema,
+  ChannelSchema,
   CreateAuthorizationBodySchema,
   CreateCallbackConfigBodySchema,
   CreateChannelBodySchema,
@@ -41,20 +55,56 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
   const adminRoutes = new Elysia()
     .get(
       '/admin/channels',
-      async ({ request }) => {
+      async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
         const admin = await iamService.requireActiveAdmin(tokenPayload.sub);
         requireAnyAdminRole(admin, ['OPS']);
-        return ok(requestId, await channelsService.listChannels());
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
+        );
+        const result = await channelsService.listChannels({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          status: typeof query.status === 'string' ? query.status : undefined,
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: ChannelsListQuerySchema,
+        response: createPageResponseSchema(ChannelSchema),
         detail: {
           tags: ['admin'],
           summary: '查询渠道列表',
           description: '后台查询渠道主体基础信息、接入方式与当前启用状态。',
+        },
+      },
+    )
+    .get(
+      '/admin/channels/:channelId',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const tokenPayload = await verifyAdminAuthorizationHeader(
+          request.headers.get('authorization'),
+        );
+        const admin = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
+        return ok(requestId, await channelsService.getChannelById(params.channelId));
+      },
+      {
+        response: createSuccessResponseSchema(ChannelSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询渠道详情',
+          description: '后台根据渠道编号查询渠道主体基础信息、状态与结算模式。',
         },
       },
     )
@@ -81,10 +131,23 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
           ip: clientIp,
         });
 
-        return ok(requestId, channel);
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: channel.id,
+            resourceType: 'CHANNEL',
+            status: channel.status,
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+          }),
+        );
       },
       {
         body: CreateChannelBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '创建渠道主体',
@@ -93,21 +156,22 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
       },
     )
     .get(
-      '/admin/channel-api-keys',
-      async ({ request }) => {
+      '/admin/channels/:channelId/api-keys',
+      async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const tokenPayload = await verifyAdminAuthorizationHeader(
           request.headers.get('authorization'),
         );
         const admin = await iamService.requireActiveAdmin(tokenPayload.sub);
         requireAnyAdminRole(admin, ['OPS']);
-        return ok(requestId, await channelsService.listCredentials());
+        return ok(requestId, await channelsService.listChannelCredentials(params.channelId));
       },
       {
+        response: createSuccessResponseSchema(t.Array(ChannelCredentialSchema)),
         detail: {
           tags: ['admin'],
           summary: '查询渠道接口凭证',
-          description: '后台查询渠道开放接口的 AccessKey、签名算法和生效状态。',
+          description: '后台查询指定渠道的开放接口凭证、签名算法和生效状态。',
         },
       },
     )
@@ -136,10 +200,24 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: body.channelId,
+            resourceType: 'CHANNEL_CREDENTIAL',
+            status: 'UPSERTED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.accessKey,
+          }),
+        );
       },
       {
         body: CreateCredentialBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '创建渠道接口凭证',
@@ -170,10 +248,24 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: body.channelId,
+            resourceType: 'CHANNEL_PRODUCT_AUTHORIZATION',
+            status: 'UPSERTED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.productId,
+          }),
+        );
       },
       {
         body: CreateAuthorizationBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '配置渠道商品授权',
@@ -204,10 +296,24 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: body.channelId,
+            resourceType: 'CHANNEL_PRICE_POLICY',
+            status: 'UPSERTED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.productId,
+          }),
+        );
       },
       {
         body: CreatePricePolicyBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '配置渠道销售价策略',
@@ -238,10 +344,23 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: body.channelId,
+            resourceType: 'CHANNEL_LIMIT_RULE',
+            status: 'UPSERTED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+          }),
+        );
       },
       {
         body: CreateLimitRuleBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '配置渠道限额规则',
@@ -278,14 +397,68 @@ export function createChannelsRoutes({ channelsService, iamService }: ChannelsRo
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: body.channelId,
+            resourceType: 'CHANNEL_CALLBACK_CONFIG',
+            status: 'UPSERTED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.callbackUrl,
+          }),
+        );
       },
       {
         body: CreateCallbackConfigBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '配置渠道回调参数',
           description: '维护渠道订单结果通知地址、签名密钥和重试超时等回调配置。',
+        },
+      },
+    )
+    .get(
+      '/admin/channels/:channelId/callback-config',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const tokenPayload = await verifyAdminAuthorizationHeader(
+          request.headers.get('authorization'),
+        );
+        const admin = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
+        return ok(requestId, await channelsService.getAdminCallbackConfig(params.channelId));
+      },
+      {
+        response: createSuccessResponseSchema(ChannelCallbackConfigSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询渠道回调配置',
+          description: '后台查询指定渠道的回调地址、签名方式、超时和重试配置。',
+        },
+      },
+    )
+    .get(
+      '/admin/channels/:channelId/order-policy',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const tokenPayload = await verifyAdminAuthorizationHeader(
+          request.headers.get('authorization'),
+        );
+        const admin = await iamService.requireActiveAdmin(tokenPayload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
+        return ok(requestId, await channelsService.getAdminOrderPolicy(params.channelId));
+      },
+      {
+        response: createSuccessResponseSchema(ChannelOrderPolicySchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询渠道下单策略',
+          description: '后台查询指定渠道的商品授权、价格策略与限额策略，供管理台配置页读取。',
         },
       },
     );

@@ -25,9 +25,94 @@ export class ProductsRepository {
     };
   }
 
-  async listAdminProducts(): Promise<RechargeProduct[]> {
-    const rows = await db.unsafe<RechargeProduct[]>(productsSql.listAdminProducts);
-    return rows.map((row) => this.mapProduct(row));
+  async listAdminProducts(input?: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    carrierCode?: string;
+    productType?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: RechargeProduct[]; total: number }> {
+    if (!input) {
+      const rows = await db.unsafe<RechargeProduct[]>(productsSql.listAdminProducts);
+      return {
+        items: rows.map((row) => this.mapProduct(row)),
+        total: rows.length,
+      };
+    }
+
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const sortByMap: Record<string, string> = {
+      productCode: 'product_code',
+      productName: 'product_name',
+      faceValue: 'face_value',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'product_code';
+    const orderDirection = input.sortOrder === 'desc' ? 'DESC' : 'ASC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(`(product_code ILIKE $${index} OR product_name ILIKE $${index})`);
+    }
+
+    const exactConditions: Array<[string, string | undefined]> = [
+      ['status', input.status],
+      ['carrier_code', input.carrierCode],
+      ['recharge_mode', input.productType],
+    ];
+
+    for (const [column, value] of exactConditions) {
+      if (!value?.trim()) {
+        continue;
+      }
+
+      params.push(value.trim());
+      whereClauses.push(`${column} = $${params.length}`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const rows = await db.unsafe<RechargeProduct[]>(
+      `
+        SELECT
+          id,
+          product_code AS "productCode",
+          product_name AS "productName",
+          carrier_code AS "carrierCode",
+          province_name AS "provinceName",
+          face_value AS "faceValue",
+          recharge_mode AS "productType",
+          sales_unit AS "salesUnit",
+          status
+        FROM product.recharge_products
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM product.recharge_products
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => this.mapProduct(row)),
+      total: total?.total ?? 0,
+    };
   }
 
   async listActiveProducts(): Promise<RechargeProduct[]> {

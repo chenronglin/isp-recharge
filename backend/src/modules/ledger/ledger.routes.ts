@@ -2,11 +2,27 @@ import { Elysia } from 'elysia';
 import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
-import { ok } from '@/lib/http';
+import {
+  buildOperationResult,
+  buildPageResult,
+  createPageResponseSchema,
+  createSuccessResponseSchema,
+  ok,
+  OperationResultSchema,
+  parseOptionalDateTime,
+  parsePagination,
+  parseSort,
+} from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { ChannelsService } from '@/modules/channels/channels.service';
 import type { IamService } from '@/modules/iam/iam.service';
-import { RechargeChannelAccountBodySchema } from '@/modules/ledger/ledger.schema';
+import {
+  AccountsListQuerySchema,
+  AccountSchema,
+  LedgerEntriesListQuerySchema,
+  LedgerEntrySchema,
+  RechargeChannelAccountBodySchema,
+} from '@/modules/ledger/ledger.schema';
 import type { LedgerService } from '@/modules/ledger/ledger.service';
 
 interface LedgerRoutesDeps {
@@ -23,14 +39,30 @@ export function createLedgerRoutes({
   const adminRoutes = new Elysia()
     .get(
       '/admin/accounts',
-      async ({ request }) => {
+      async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['FINANCE']);
-        return ok(requestId, await ledgerService.listAccounts());
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
+        );
+        const result = await ledgerService.listAccounts({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          status: typeof query.status === 'string' ? query.status : undefined,
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: AccountsListQuerySchema,
+        response: createPageResponseSchema(AccountSchema),
         detail: {
           tags: ['admin'],
           summary: '查询账务账户',
@@ -39,15 +71,55 @@ export function createLedgerRoutes({
       },
     )
     .get(
-      '/admin/ledger-entries',
-      async ({ request }) => {
+      '/admin/accounts/:accountId',
+      async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['FINANCE']);
-        return ok(requestId, await ledgerService.listLedgerEntries());
+        return ok(requestId, await ledgerService.getAccountById(params.accountId));
       },
       {
+        response: createSuccessResponseSchema(AccountSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询账务账户详情',
+          description: '后台根据账户编号查询账户余额、状态与归属信息。',
+        },
+      },
+    )
+    .get(
+      '/admin/ledger-entries',
+      async ({ query, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['FINANCE']);
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
+        );
+        const result = await ledgerService.listLedgerEntries({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          startTime: parseOptionalDateTime(query.startTime),
+          endTime: parseOptionalDateTime(query.endTime),
+          accountId: typeof query.accountId === 'string' ? query.accountId : undefined,
+          orderNo: typeof query.orderNo === 'string' ? query.orderNo : undefined,
+          channelId: typeof query.channelId === 'string' ? query.channelId : undefined,
+          entryType: typeof query.entryType === 'string' ? query.entryType : undefined,
+          bizNo: typeof query.bizNo === 'string' ? query.bizNo : undefined,
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
+      },
+      {
+        query: LedgerEntriesListQuerySchema,
+        response: createPageResponseSchema(LedgerEntrySchema),
         detail: {
           tags: ['admin'],
           summary: '查询账务流水',
@@ -65,6 +137,7 @@ export function createLedgerRoutes({
         return ok(requestId, await ledgerService.getLedgerEntryById(params.entryId));
       },
       {
+        response: createSuccessResponseSchema(LedgerEntrySchema),
         detail: {
           tags: ['admin'],
           summary: '查询账务流水详情',
@@ -102,15 +175,24 @@ export function createLedgerRoutes({
           ip: clientIp,
         });
 
-        return ok(requestId, {
-          success: true,
-          channelId: params.channelId,
-          amount: body.amount,
-          referenceNo: result.referenceNo,
-        });
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: params.channelId,
+            resourceType: 'CHANNEL_ACCOUNT',
+            status: 'RECHARGED',
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+            remark: body.remark,
+          }),
+        );
       },
       {
         body: RechargeChannelAccountBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
         detail: {
           tags: ['admin'],
           summary: '为渠道账户充值',

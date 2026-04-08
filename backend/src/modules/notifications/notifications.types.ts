@@ -17,6 +17,9 @@ export interface NotificationTask {
   attemptCount: number;
   maxAttempts: number;
   lastError: string | null;
+  nextRetryAt: string | null;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface NotificationDeliveryLog {
@@ -30,6 +33,32 @@ export interface NotificationDeliveryLog {
 }
 
 export interface NotificationTaskDetail {
-  task: NotificationTask;
-  recentDeliveries: NotificationDeliveryLog[];
+  basicInfo: {
+    taskNo: string;
+    orderNo: string;
+    channelId: string;
+    notifyType: NotificationTaskType;
+    destination: string;
+    status: NotificationTaskStatus;
+    attemptCount: number;
+    maxAttempts: number;
+    lastError: string | null;
+    nextRetryAt: string | null;
+    createdAt: string;
+    updatedAt: string;
+  };
+  deliverySummary: {
+    latestDeliveryAt: string | null;
+    latestResponseStatus: string | null;
+    successCount: number;
+    failureCount: number;
+  };
+  payloadSnapshot: Record<string, unknown>;
+}
+
+export interface NotificationDeadLetter {
+  id: string;
+  taskNo: string;
+  reason: string;
+  createdAt: string;
 }

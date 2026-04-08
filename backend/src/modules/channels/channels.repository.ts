@@ -26,8 +26,74 @@ export class ChannelsRepository {
     };
   }
 
-  async listChannels(): Promise<Channel[]> {
-    return db.unsafe<Channel[]>(channelsSql.listChannels);
+  async listChannels(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }): Promise<{ items: Channel[]; total: number }> {
+    const offset = (input.pageNum - 1) * input.pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const sortByMap: Record<string, string> = {
+      createdAt: 'created_at',
+      updatedAt: 'updated_at',
+      channelCode: 'channel_code',
+      channelName: 'channel_name',
+    };
+    const orderColumn = sortByMap[input.sortBy ?? ''] ?? 'created_at';
+    const orderDirection = input.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (input.keyword?.trim()) {
+      params.push(`%${input.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(`(channel_code ILIKE $${index} OR channel_name ILIKE $${index})`);
+    }
+
+    if (input.status?.trim()) {
+      params.push(input.status.trim());
+      whereClauses.push(`status = $${params.length}`);
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    params.push(input.pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const items = await db.unsafe<Channel[]>(
+      `
+        SELECT
+          id,
+          channel_code AS "channelCode",
+          channel_name AS "channelName",
+          channel_type AS "channelType",
+          status,
+          settlement_mode AS "settlementMode",
+          created_at AS "createdAt",
+          updated_at AS "updatedAt"
+        FROM channel.channels
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id DESC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM channel.channels
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items,
+      total: total?.total ?? 0,
+    };
   }
 
   async createChannel(input: {
@@ -112,6 +178,24 @@ export class ChannelsRepository {
 
   async listCredentials(): Promise<ChannelCredential[]> {
     return db.unsafe<ChannelCredential[]>(channelsSql.listCredentials);
+  }
+
+  async listCredentialsByChannelId(channelId: string): Promise<ChannelCredential[]> {
+    return db<ChannelCredential[]>`
+      SELECT
+        id,
+        channel_id AS "channelId",
+        access_key AS "accessKey",
+        secret_key_encrypted AS "secretKeyEncrypted",
+        sign_algorithm AS "signAlgorithm",
+        status,
+        expires_at AS "expiresAt",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM channel.channel_api_credentials
+      WHERE channel_id = ${channelId}
+      ORDER BY created_at DESC, id DESC
+    `;
   }
 
   async findCredentialByAccessKey(accessKey: string): Promise<ChannelCredential | null> {
@@ -410,5 +494,36 @@ export class ChannelsRepository {
       WHERE channel_id = ${channelId}
       LIMIT 1
     `);
+  }
+
+  async listAuthorizationsByChannelId(channelId: string): Promise<string[]> {
+    const rows = await db<{ productId: string }[]>`
+      SELECT product_id AS "productId"
+      FROM channel.channel_product_authorizations
+      WHERE channel_id = ${channelId}
+        AND status = 'ACTIVE'
+      ORDER BY product_id ASC
+    `;
+
+    return rows.map((row) => row.productId);
+  }
+
+  async listPricePoliciesByChannelId(channelId: string): Promise<ChannelPricePolicy[]> {
+    const rows = await db<ChannelPricePolicy[]>`
+      SELECT
+        id,
+        channel_id AS "channelId",
+        product_id AS "productId",
+        sale_price AS "salePrice",
+        currency,
+        status,
+        effective_from AS "effectiveFrom",
+        effective_to AS "effectiveTo"
+      FROM channel.channel_price_policies
+      WHERE channel_id = ${channelId}
+      ORDER BY created_at DESC, id DESC
+    `;
+
+    return rows.map((row) => this.mapPricePolicy(row));
   }
 }

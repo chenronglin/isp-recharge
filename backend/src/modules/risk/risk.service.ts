@@ -1,5 +1,7 @@
 import type { RiskContract } from '@/modules/risk/contracts';
 import type { RiskRepository } from '@/modules/risk/risk.repository';
+import { notFound } from '@/lib/errors';
+import { toIsoDateTime } from '@/lib/utils';
 
 export class RiskService implements RiskContract {
   constructor(private readonly repository: RiskRepository) {}
@@ -24,8 +26,15 @@ export class RiskService implements RiskContract {
     });
   }
 
-  async listRules() {
-    return this.repository.listRules();
+  async listRules(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    return this.repository.listRules(input);
   }
 
   async createRule(input: {
@@ -41,8 +50,15 @@ export class RiskService implements RiskContract {
     });
   }
 
-  async listBlackWhiteEntries() {
-    return this.repository.listBlackWhiteEntries();
+  async listBlackWhiteEntries(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    return this.repository.listBlackWhiteEntries(input);
   }
 
   async createBlackWhiteEntry(input: {
@@ -54,8 +70,34 @@ export class RiskService implements RiskContract {
     return this.repository.createBlackWhiteEntry(input);
   }
 
-  async listDecisions() {
-    return this.repository.listDecisions();
+  async listDecisions(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listDecisions(input);
+    return {
+      items: result.items.map((item) => ({
+        ...item,
+        createdAt: toIsoDateTime(item.createdAt) ?? item.createdAt,
+      })),
+      total: result.total,
+    };
+  }
+
+  async getRuleDetail(ruleId: string) {
+    const rule = await this.repository.findRuleById(ruleId);
+
+    if (!rule) {
+      throw notFound('风控规则不存在');
+    }
+
+    return rule;
   }
 
   async preCheck(input: {
@@ -124,8 +166,13 @@ export class RiskService implements RiskContract {
       return decision;
     }
 
-    const rules = await this.repository.listRules();
-    const amountRule = rules.find(
+    const rules = await this.repository.listRules({
+      pageNum: 1,
+      pageSize: 100,
+      sortBy: 'priority',
+      sortOrder: 'asc',
+    });
+    const amountRule = rules.items.find(
       (rule) => rule.ruleCode === 'AMOUNT_REJECT' && rule.status === 'ACTIVE',
     );
 

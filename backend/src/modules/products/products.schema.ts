@@ -1,4 +1,5 @@
 import { t } from 'elysia';
+import { SortOrderSchema } from '@/lib/http';
 
 export const RechargeCarrierCodeSchema = t.Union([
   t.Literal('CMCC'),
@@ -24,4 +25,27 @@ export const SaveRechargeProductBodySchema = t.Object({
 
 export const ProductIdParamsSchema = t.Object({
   productId: t.String({ minLength: 1 }),
+});
+
+export const AdminProductsQuerySchema = t.Object({
+  pageNum: t.Optional(t.Numeric({ minimum: 1, default: 1 })),
+  pageSize: t.Optional(t.Numeric({ minimum: 1, maximum: 100, default: 20 })),
+  keyword: t.Optional(t.String({ minLength: 1 })),
+  status: t.Optional(RechargeProductStatusSchema),
+  sortBy: t.Optional(t.String({ minLength: 1 })),
+  sortOrder: t.Optional(SortOrderSchema),
+  carrierCode: t.Optional(RechargeCarrierCodeSchema),
+  productType: t.Optional(RechargeProductTypeSchema),
+});
+
+export const AdminRechargeProductSchema = t.Object({
+  id: t.String(),
+  productCode: t.String(),
+  productName: t.String(),
+  carrierCode: RechargeCarrierCodeSchema,
+  provinceName: t.String(),
+  faceValueAmountFen: t.Number(),
+  productType: RechargeProductTypeSchema,
+  salesUnit: t.String(),
+  status: RechargeProductStatusSchema,
 });

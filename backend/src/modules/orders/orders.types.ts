@@ -104,7 +104,32 @@ export interface OpenOrderEventRecord {
 }
 
 export interface OrderListFilters {
+  pageNum?: number;
+  pageSize?: number;
+  keyword?: string;
+  status?: string;
+  startTime?: string | null;
+  endTime?: string | null;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
   orderNo?: string;
+  channelOrderNo?: string;
   mobile?: string;
+  channelId?: string;
+  productId?: string;
+  mainStatus?: string;
+  supplierStatus?: string;
+  notifyStatus?: string;
+  refundStatus?: string;
+  exceptionTag?: string;
   supplierOrderNo?: string;
+}
+
+export interface OrderEventListFilters {
+  pageNum?: number;
+  pageSize?: number;
+  startTime?: string | null;
+  endTime?: string | null;
+  sortBy?: string;
+  sortOrder?: 'asc' | 'desc';
 }

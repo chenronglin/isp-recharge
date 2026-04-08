@@ -1,5 +1,6 @@
 import { badRequest, conflict, notFound } from '@/lib/errors';
 import { lookupMobileSegment } from '@/lib/mobile-lookup';
+import { toAmountFen } from '@/lib/utils';
 import type { ProductContract } from '@/modules/products/contracts';
 import type { ProductsRepository } from '@/modules/products/products.repository';
 import type {
@@ -15,8 +16,45 @@ const rechargeProductStatuses = new Set<RechargeProductStatus>(['ACTIVE', 'INACT
 export class ProductsService implements ProductContract {
   constructor(private readonly repository: ProductsRepository) {}
 
-  async listAdminProducts() {
-    return this.repository.listAdminProducts();
+  private toAdminProduct(product: {
+    id: string;
+    productCode: string;
+    productName: string;
+    carrierCode: RechargeCarrierCode;
+    provinceName: string;
+    faceValue: number;
+    productType: RechargeProductType;
+    salesUnit: string;
+    status: RechargeProductStatus;
+  }) {
+    return {
+      id: product.id,
+      productCode: product.productCode,
+      productName: product.productName,
+      carrierCode: product.carrierCode,
+      provinceName: product.provinceName,
+      faceValueAmountFen: toAmountFen(product.faceValue) ?? 0,
+      productType: product.productType,
+      salesUnit: product.salesUnit,
+      status: product.status,
+    };
+  }
+
+  async listAdminProducts(input: {
+    pageNum: number;
+    pageSize: number;
+    keyword?: string;
+    status?: string;
+    carrierCode?: string;
+    productType?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listAdminProducts(input);
+    return {
+      items: result.items.map((item) => this.toAdminProduct(item)),
+      total: result.total,
+    };
   }
 
   async listProducts() {
@@ -73,6 +111,16 @@ export class ProductsService implements ProductContract {
     const normalizedInput = this.normalizeRechargeProductInput(input);
     await this.ensureRechargeProductUpsertAllowed(normalizedInput, productId);
     return this.repository.updateRechargeProduct(productId, normalizedInput);
+  }
+
+  async getAdminProductById(productId: string) {
+    const product = await this.repository.findProductById(productId);
+
+    if (!product) {
+      throw notFound('平台商品不存在');
+    }
+
+    return this.toAdminProduct(product);
   }
 
   private normalizeRechargeProductInput(input: SaveRechargeProductInput): SaveRechargeProductInput {

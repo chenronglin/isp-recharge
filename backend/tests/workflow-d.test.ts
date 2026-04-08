@@ -271,7 +271,9 @@ describe('工作流 D 集成验证', () => {
       }),
     );
     const byOrderNoPayload = (await byOrderNoResponse.json()) as {
-      data: Array<{ orderNo: string }>;
+      data: {
+        records: Array<{ orderNo: string }>;
+      };
     };
 
     const byMobileResponse = await runtime.app.handle(
@@ -282,7 +284,9 @@ describe('工作流 D 集成验证', () => {
       }),
     );
     const byMobilePayload = (await byMobileResponse.json()) as {
-      data: Array<{ orderNo: string }>;
+      data: {
+        records: Array<{ orderNo: string }>;
+      };
     };
 
     const bySupplierOrderResponse = await runtime.app.handle(
@@ -293,12 +297,16 @@ describe('工作流 D 集成验证', () => {
       }),
     );
     const bySupplierOrderPayload = (await bySupplierOrderResponse.json()) as {
-      data: Array<{ orderNo: string }>;
+      data: {
+        records: Array<{ orderNo: string }>;
+      };
     };
 
-    expect(byOrderNoPayload.data.map((item) => item.orderNo)).toEqual(['order-filter-1']);
-    expect(byMobilePayload.data.map((item) => item.orderNo)).toEqual(['order-filter-2']);
-    expect(bySupplierOrderPayload.data.map((item) => item.orderNo)).toEqual(['order-filter-1']);
+    expect(byOrderNoPayload.data.records.map((item) => item.orderNo)).toEqual(['order-filter-1']);
+    expect(byMobilePayload.data.records.map((item) => item.orderNo)).toEqual(['order-filter-2']);
+    expect(bySupplierOrderPayload.data.records.map((item) => item.orderNo)).toEqual([
+      'order-filter-1',
+    ]);
   });
 
   test('通知任务详情返回任务和最近投递记录', async () => {
@@ -385,27 +393,23 @@ describe('工作流 D 集成验证', () => {
     const payload = (await response.json()) as {
       code: number;
       data: {
-        task: {
+        basicInfo: {
           taskNo: string;
           status: string;
         };
-        recentDeliveries: Array<{
-          id: string;
-          responseStatus: string;
-        }>;
+        deliverySummary: {
+          latestResponseStatus: string | null;
+        };
       };
     };
 
     expect(response.status).toBe(200);
     expect(payload.code).toBe(0);
-    expect(payload.data.task).toMatchObject({
+    expect(payload.data.basicInfo).toMatchObject({
       taskNo: 'notify-detail-1',
       status: 'RETRYING',
     });
-    expect(payload.data.recentDeliveries.map((item) => item.id)).toEqual([
-      'itest-notify-log-2',
-      'itest-notify-log-1',
-    ]);
+    expect(payload.data.deliverySummary.latestResponseStatus).toBe('200');
   });
 
   test('退款失败后会自动创建补偿任务并在后续重试成功', async () => {

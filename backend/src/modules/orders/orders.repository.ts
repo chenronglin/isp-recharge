@@ -5,6 +5,7 @@ import { ordersSql } from '@/modules/orders/orders.sql';
 import type {
   MainOrderStatus,
   OrderEventRecord,
+  OrderEventListFilters,
   OrderListFilters,
   OrderMonitorStatus,
   OrderNotifyStatus,
@@ -83,8 +84,76 @@ export class OrdersRepository {
       : 'NORMAL';
   }
 
-  async listOrders(filters: OrderListFilters = {}): Promise<OrderRecord[]> {
-    const rows = await db<OrderRecord[]>`
+  async listOrders(
+    filters: OrderListFilters = {},
+  ): Promise<{ items: OrderRecord[]; total: number }> {
+    const pageNum = filters.pageNum ?? 1;
+    const pageSize = filters.pageSize ?? 20;
+    const offset = (pageNum - 1) * pageSize;
+    const params: unknown[] = [];
+    const whereClauses: string[] = [];
+    const sortByMap: Record<string, string> = {
+      createdAt: 'orders.created_at',
+      updatedAt: 'orders.updated_at',
+      finishedAt: 'orders.finished_at',
+    };
+    const orderColumn = sortByMap[filters.sortBy ?? ''] ?? 'orders.created_at';
+    const orderDirection = filters.sortOrder === 'asc' ? 'ASC' : 'DESC';
+
+    if (filters.keyword?.trim()) {
+      params.push(`%${filters.keyword.trim()}%`);
+      const index = params.length;
+      whereClauses.push(
+        `(orders.order_no ILIKE $${index} OR orders.channel_order_no ILIKE $${index} OR orders.mobile_number ILIKE $${index})`,
+      );
+    }
+
+    const equalityConditions: Array<[string, string | undefined]> = [
+      ['orders.order_no', filters.orderNo],
+      ['orders.channel_order_no', filters.channelOrderNo],
+      ['orders.mobile_number', filters.mobile],
+      ['orders.channel_id', filters.channelId],
+      ['orders.product_id', filters.productId],
+      ['orders.main_status', filters.mainStatus ?? filters.status],
+      ['orders.supplier_status', filters.supplierStatus],
+      ['orders.notify_status', filters.notifyStatus],
+      ['orders.refund_status', filters.refundStatus],
+      ['orders.exception_tag', filters.exceptionTag],
+    ];
+
+    for (const [column, value] of equalityConditions) {
+      if (!value?.trim()) {
+        continue;
+      }
+
+      params.push(value.trim());
+      whereClauses.push(`${column} = $${params.length}`);
+    }
+
+    if (filters.startTime) {
+      params.push(filters.startTime);
+      whereClauses.push(`orders.created_at >= $${params.length}::timestamptz`);
+    }
+
+    if (filters.endTime) {
+      params.push(filters.endTime);
+      whereClauses.push(`orders.created_at <= $${params.length}::timestamptz`);
+    }
+
+    if (filters.supplierOrderNo?.trim()) {
+      params.push(filters.supplierOrderNo.trim());
+      whereClauses.push(
+        `EXISTS (
+          SELECT 1
+          FROM supplier.supplier_orders AS supplier_orders
+          WHERE supplier_orders.order_no = orders.order_no
+            AND supplier_orders.supplier_order_no = $${params.length}
+        )`,
+      );
+    }
+
+    const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const baseSelect = `
       SELECT
         id,
         order_no AS "orderNo",
@@ -122,20 +191,30 @@ export class OrdersRepository {
         expire_deadline_at AS "expireDeadlineAt",
         finished_at AS "finishedAt"
       FROM ordering.orders AS orders
-      WHERE (${filters.orderNo ?? null}::TEXT IS NULL OR orders.order_no = ${filters.orderNo ?? null})
-        AND (${filters.mobile ?? null}::TEXT IS NULL OR orders.mobile_number = ${filters.mobile ?? null})
-        AND (
-          ${filters.supplierOrderNo ?? null}::TEXT IS NULL
-          OR EXISTS (
-            SELECT 1
-            FROM supplier.supplier_orders AS supplier_orders
-            WHERE supplier_orders.order_no = orders.order_no
-              AND supplier_orders.supplier_order_no = ${filters.supplierOrderNo ?? null}
-          )
-        )
-      ORDER BY orders.created_at DESC
+      ${whereSql}
     `;
-    return rows.map((row) => this.mapOrder(row));
+    params.push(pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const rows = await db.unsafe<OrderRecord[]>(
+      `${baseSelect}
+       ORDER BY ${orderColumn} ${orderDirection}, orders.id DESC
+       LIMIT $${limitIndex} OFFSET $${offsetIndex}`,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `SELECT COUNT(*)::int AS total
+         FROM ordering.orders AS orders
+         ${whereSql}`,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => this.mapOrder(row)),
+      total: total?.total ?? 0,
+    };
   }
 
   async findByOrderNo(orderNo: string): Promise<OrderRecord | null> {
@@ -513,9 +592,71 @@ export class OrdersRepository {
     `;
   }
 
-  async listEvents(orderNo: string): Promise<OrderEventRecord[]> {
-    const rows = await db.unsafe<OrderEventRecord[]>(ordersSql.listEvents, [orderNo]);
-    return rows.map((row) => this.mapEvent(row));
+  async listEvents(
+    orderNo: string,
+    filters: OrderEventListFilters = {},
+  ): Promise<{ items: OrderEventRecord[]; total: number }> {
+    const pageNum = filters.pageNum ?? 1;
+    const pageSize = filters.pageSize ?? 20;
+    const offset = (pageNum - 1) * pageSize;
+    const params: unknown[] = [orderNo];
+    const whereClauses = ['order_no = $1'];
+    const sortByMap: Record<string, string> = {
+      occurredAt: 'occurred_at',
+    };
+    const orderColumn = sortByMap[filters.sortBy ?? ''] ?? 'occurred_at';
+    const orderDirection = filters.sortOrder === 'desc' ? 'DESC' : 'ASC';
+
+    if (filters.startTime) {
+      params.push(filters.startTime);
+      whereClauses.push(`occurred_at >= $${params.length}::timestamptz`);
+    }
+
+    if (filters.endTime) {
+      params.push(filters.endTime);
+      whereClauses.push(`occurred_at <= $${params.length}::timestamptz`);
+    }
+
+    const whereSql = `WHERE ${whereClauses.join(' AND ')}`;
+    params.push(pageSize, offset);
+    const limitIndex = params.length - 1;
+    const offsetIndex = params.length;
+    const rows = await db.unsafe<OrderEventRecord[]>(
+      `
+        SELECT
+          id,
+          order_no AS "orderNo",
+          event_type AS "eventType",
+          source_service AS "sourceService",
+          source_no AS "sourceNo",
+          before_status_json AS "beforeStatusJson",
+          after_status_json AS "afterStatusJson",
+          payload_json AS "payloadJson",
+          operator,
+          request_id AS "requestId",
+          occurred_at AS "occurredAt"
+        FROM ordering.order_events
+        ${whereSql}
+        ORDER BY ${orderColumn} ${orderDirection}, id ASC
+        LIMIT $${limitIndex} OFFSET $${offsetIndex}
+      `,
+      params,
+    );
+    const total = await first<{ total: number }>(
+      db.unsafe(
+        `
+          SELECT COUNT(*)::int AS total
+          FROM ordering.order_events
+          ${whereSql}
+        `,
+        params.slice(0, params.length - 2),
+      ),
+    );
+
+    return {
+      items: rows.map((row) => this.mapEvent(row)),
+      total: total?.total ?? 0,
+    };
   }
 
   async deleteOrder(orderNo: string): Promise<void> {
