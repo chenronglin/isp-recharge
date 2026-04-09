@@ -52,9 +52,9 @@ export class IamService implements IamContract {
       ...profile,
       email: user.email,
       mobile: user.mobile,
-      lastLoginAt: user.lastLoginAt,
-      createdAt: user.createdAt,
-      updatedAt: user.updatedAt,
+      lastLoginAt: toIsoDateTime(user.lastLoginAt),
+      createdAt: toIsoDateTime(user.createdAt) ?? String(user.createdAt),
+      updatedAt: toIsoDateTime(user.updatedAt) ?? String(user.updatedAt),
     };
   }
 
@@ -262,7 +262,7 @@ export class IamService implements IamContract {
     return {
       ...base,
       failedLoginAttempts: user.failedLoginAttempts,
-      lockedUntil: user.lockedUntil,
+      lockedUntil: toIsoDateTime(user.lockedUntil),
     };
   }
 
