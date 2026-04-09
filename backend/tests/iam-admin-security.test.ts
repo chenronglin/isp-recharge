@@ -94,6 +94,56 @@ afterAll(() => {
 });
 
 describe('IAM 权限与审计', () => {
+  test('后台用户与角色列表接口会输出可通过 response schema 校验的 ISO 时间字符串', async () => {
+    const authorization = await buildAdminAuthorizationHeader('seed-admin-user', ['SUPER_ADMIN']);
+    const [usersResponse, rolesResponse] = await Promise.all([
+      runtime.app.handle(
+        new Request('http://localhost/admin/users/?pageNum=1&pageSize=20', {
+          method: 'GET',
+          headers: { authorization },
+        }),
+      ),
+      runtime.app.handle(
+        new Request('http://localhost/admin/roles/?pageNum=1&pageSize=20', {
+          method: 'GET',
+          headers: { authorization },
+        }),
+      ),
+    ]);
+    const usersPayload = (await usersResponse.json()) as {
+      code: number;
+      data: {
+        records: Array<{
+          createdAt: string;
+          updatedAt: string;
+          lastLoginAt: string | null;
+        }>;
+      };
+    };
+    const rolesPayload = (await rolesResponse.json()) as {
+      code: number;
+      data: {
+        records: Array<{
+          createdAt: string;
+          updatedAt: string;
+        }>;
+      };
+    };
+
+    expect(usersResponse.status).toBe(200);
+    expect(rolesResponse.status).toBe(200);
+    expect(usersPayload.code).toBe(0);
+    expect(rolesPayload.code).toBe(0);
+    expect(usersPayload.data.records[0]?.createdAt).toMatch(/Z$/);
+    expect(usersPayload.data.records[0]?.updatedAt).toMatch(/Z$/);
+    expect(
+      usersPayload.data.records[0]?.lastLoginAt === null ||
+        /Z$/.test(usersPayload.data.records[0]?.lastLoginAt),
+    ).toBe(true);
+    expect(rolesPayload.data.records[0]?.createdAt).toMatch(/Z$/);
+    expect(rolesPayload.data.records[0]?.updatedAt).toMatch(/Z$/);
+  });
+
   test('连续输错密码会临时锁定账号，并可分页查询登录日志', async () => {
     for (let attempt = 1; attempt <= 5; attempt += 1) {
       const response = await runtime.app.handle(

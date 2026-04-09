@@ -21,6 +21,24 @@ const loginFailureLockMinutes = 15;
 export class IamService implements IamContract {
   constructor(private readonly repository: IamRepository) {}
 
+  private toRoleDto(role: {
+    id: string;
+    roleCode: string;
+    roleName: string;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+  }) {
+    return {
+      id: role.id,
+      roleCode: role.roleCode,
+      roleName: role.roleName,
+      status: role.status,
+      createdAt: toIsoDateTime(role.createdAt) ?? String(role.createdAt),
+      updatedAt: toIsoDateTime(role.updatedAt) ?? String(role.updatedAt),
+    };
+  }
+
   private async buildAdminUserProfile(userId: string): Promise<AdminUserProfile> {
     const user = await this.repository.findUserById(userId);
 
@@ -313,7 +331,12 @@ export class IamService implements IamContract {
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
   }) {
-    return this.repository.listRoles(input);
+    const result = await this.repository.listRoles(input);
+
+    return {
+      items: result.items.map((item) => this.toRoleDto(item)),
+      total: result.total,
+    };
   }
 
   async getRoleDetail(roleId: string) {
@@ -323,7 +346,7 @@ export class IamService implements IamContract {
       throw badRequest('角色不存在');
     }
 
-    return role;
+    return this.toRoleDto(role);
   }
 
   async createUser(input: {
