@@ -45,11 +45,8 @@ export const fixedRechargeRegions = [
   { provinceName: '新疆', provinceCode: 'xinjiang' },
 ] as const;
 
-export const fixedRechargeFaceValues = [10, 30, 50, 100, 200] as const;
-export const fixedRechargeModes = [
-  'FAST',
-  'MIXED',
-] as const satisfies readonly RechargeProductType[];
+export const fixedRechargeFaceValues = [10, 20, 50, 100, 200] as const;
+export const fixedRechargeModes = ['FAST', 'MIXED'] as const satisfies readonly RechargeProductType[];
 export const FIXED_RECHARGE_PRODUCT_COUNT =
   fixedRechargeCarriers.length *
   fixedRechargeRegions.length *
@@ -126,17 +123,20 @@ function buildSeedRechargeProductName(input: {
 }) {
   const carrier = getCarrierSeedMeta(input.carrierCode);
   const productTypeName = input.productType === 'FAST' ? '快充' : '混充';
-
   return `${input.provinceName}${carrier.displayName}话费 ${input.faceValue} 元${productTypeName}`;
 }
 
-function sqlLiteral(value: string | number): string {
+function sqlLiteral(value: string | number | boolean): string {
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) {
       throw new Error(`SQL 数值非法: ${value}`);
     }
 
     return String(value);
+  }
+
+  if (typeof value === 'boolean') {
+    return value ? 'TRUE' : 'FALSE';
   }
 
   return `'${value.replaceAll("'", "''")}'`;
@@ -153,6 +153,7 @@ const seedIds = {
   demoCredential: 'seed-channel-credential-demo',
   demoCallback: 'seed-channel-callback-demo',
   demoLimitRule: 'seed-channel-limit-demo',
+  demoSplitPolicy: 'seed-channel-split-policy-demo',
   mockSupplier: 'seed-supplier-mock',
   mockSupplierConfig: 'seed-supplier-config-mock',
   shenzhenKefeiSupplier: 'seed-supplier-shenzhen-kefei',
@@ -212,7 +213,9 @@ async function seedFixedRechargeCatalog(tx: SQL): Promise<void> {
       face_value,
       recharge_mode,
       sales_unit,
-      status
+      status,
+      arrival_sla,
+      recharge_range_json
     )
     VALUES
       ${products
@@ -222,7 +225,9 @@ async function seedFixedRechargeCatalog(tx: SQL): Promise<void> {
               product.productName,
             )}, ${sqlLiteral(product.carrierCode)}, ${sqlLiteral(product.provinceName)}, ${sqlLiteral(
               product.faceValue,
-            )}, ${sqlLiteral(product.productType)}, 'CNY', 'ACTIVE')`,
+            )}, ${sqlLiteral(product.productType)}, 'CNY', 'ACTIVE', 'T+0', '${JSON.stringify([
+              product.faceValue,
+            ])}'::jsonb)`,
         )
         .join(',\n      ')}
     ON CONFLICT (product_code) DO UPDATE
@@ -234,6 +239,8 @@ async function seedFixedRechargeCatalog(tx: SQL): Promise<void> {
       recharge_mode = EXCLUDED.recharge_mode,
       sales_unit = EXCLUDED.sales_unit,
       status = EXCLUDED.status,
+      arrival_sla = EXCLUDED.arrival_sla,
+      recharge_range_json = EXCLUDED.recharge_range_json,
       updated_at = NOW()
   `);
 
@@ -259,7 +266,7 @@ async function seedFixedRechargeCatalog(tx: SQL): Promise<void> {
               product.id,
             )}, ${sqlLiteral(seedIds.mockSupplier)}, ${sqlLiteral(
               product.supplierProductCode,
-            )}, 'PRIMARY', 1, ${sqlLiteral(product.costPrice)}, 'ON_SALE', 100, NOW(), 'ACTIVE')`,
+            )}, 'PRIMARY', 1, ${sqlLiteral(product.costPrice)}, 'ON_SALE', 1000, NOW(), 'ACTIVE')`,
         )
         .join(',\n      ')}
     ON CONFLICT (product_id, supplier_id) DO UPDATE
@@ -323,11 +330,13 @@ async function seedFixedRechargeCatalog(tx: SQL): Promise<void> {
 }
 
 export async function runSeed(db: SQL): Promise<void> {
-  const passwordHash = await hashPassword(env.seed.adminPassword);
+  const adminPasswordHash = await hashPassword(env.seed.adminPassword);
+  const channelPasswordHash = await hashPassword(env.seed.channelPortalPassword);
   const channelSecret = encryptText(env.seed.secretKey);
   const callbackSecret = encryptText('demo-callback-secret');
   const supplierCredential = encryptText('mock-supplier-token');
   const supplierCallbackSecret = encryptText('mock-supplier-callback');
+  const supplierAccessPassword = encryptText('mock-password');
   const shenzhenKefeiCredential = encryptText(
     JSON.stringify({
       agentAccount: 'JG18948358181',
@@ -336,25 +345,9 @@ export async function runSeed(db: SQL): Promise<void> {
     }),
   );
   const shenzhenKefeiCallbackSecret = encryptText('F29C80BB80EA32D4');
+  const shenzhenKefeiAccessPassword = encryptText('sohan-password');
 
   await db.begin(async (tx) => {
-    await tx.unsafe(`
-      ALTER TABLE iam.admin_users
-        ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
-
-      CREATE TABLE IF NOT EXISTS iam.login_logs (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NULL REFERENCES iam.admin_users(id),
-        username TEXT NOT NULL,
-        ip TEXT NOT NULL,
-        device_summary TEXT NOT NULL DEFAULT '',
-        result TEXT NOT NULL,
-        failure_reason TEXT NULL,
-        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-      );
-    `);
-
     await tx`
       INSERT INTO iam.admin_users (
         id,
@@ -366,7 +359,7 @@ export async function runSeed(db: SQL): Promise<void> {
       VALUES (
         ${seedIds.adminUser},
         ${env.seed.adminUsername},
-        ${passwordHash},
+        ${adminPasswordHash},
         ${env.seed.adminDisplayName},
         'ACTIVE'
       )
@@ -396,11 +389,16 @@ export async function runSeed(db: SQL): Promise<void> {
         updated_at = NOW()
     `;
 
-    await tx`
+    await tx.unsafe(`
       INSERT INTO iam.user_role_relations (user_id, role_id)
-      VALUES (${seedIds.adminUser}, ${seedIds.superAdminRole})
+      VALUES
+        (${sqlLiteral(seedIds.adminUser)}, ${sqlLiteral(seedIds.superAdminRole)}),
+        (${sqlLiteral(seedIds.adminUser)}, ${sqlLiteral(seedIds.opsRole)}),
+        (${sqlLiteral(seedIds.adminUser)}, ${sqlLiteral(seedIds.financeRole)}),
+        (${sqlLiteral(seedIds.adminUser)}, ${sqlLiteral(seedIds.riskRole)}),
+        (${sqlLiteral(seedIds.adminUser)}, ${sqlLiteral(seedIds.supportRole)})
       ON CONFLICT (user_id, role_id) DO NOTHING
-    `;
+    `);
 
     await tx`
       INSERT INTO channel.channels (
@@ -408,23 +406,53 @@ export async function runSeed(db: SQL): Promise<void> {
         channel_code,
         channel_name,
         channel_type,
+        contact_name,
+        contact_phone,
+        contact_email,
+        base_url,
+        protocol_type,
+        access_account,
+        access_password_hash,
+        cooperation_status,
+        supports_consumption_log,
+        settlement_mode,
         status,
-        settlement_mode
+        remark
       )
       VALUES (
         ${seedIds.demoChannel},
         ${env.seed.channelCode},
         '演示渠道',
         'API',
+        '渠道对接人',
+        '13800138000',
+        'channel@example.com',
+        'https://channel.example.com/open-api',
+        'REST',
+        ${env.seed.channelPortalAccount},
+        ${channelPasswordHash},
         'ACTIVE',
-        'PREPAID'
+        TRUE,
+        'PREPAID',
+        'ACTIVE',
+        '默认演示渠道'
       )
       ON CONFLICT (channel_code) DO UPDATE
       SET
         channel_name = EXCLUDED.channel_name,
         channel_type = EXCLUDED.channel_type,
-        status = EXCLUDED.status,
+        contact_name = EXCLUDED.contact_name,
+        contact_phone = EXCLUDED.contact_phone,
+        contact_email = EXCLUDED.contact_email,
+        base_url = EXCLUDED.base_url,
+        protocol_type = EXCLUDED.protocol_type,
+        access_account = EXCLUDED.access_account,
+        access_password_hash = EXCLUDED.access_password_hash,
+        cooperation_status = EXCLUDED.cooperation_status,
+        supports_consumption_log = EXCLUDED.supports_consumption_log,
         settlement_mode = EXCLUDED.settlement_mode,
+        status = EXCLUDED.status,
+        remark = EXCLUDED.remark,
         updated_at = NOW()
     `;
 
@@ -510,24 +538,98 @@ export async function runSeed(db: SQL): Promise<void> {
     `;
 
     await tx`
+      INSERT INTO channel.channel_split_policies (
+        id,
+        channel_id,
+        enabled,
+        allowed_face_values_json,
+        prefer_max_single_face_value,
+        max_split_pieces,
+        province_override,
+        carrier_override
+      )
+      VALUES (
+        ${seedIds.demoSplitPolicy},
+        ${seedIds.demoChannel},
+        TRUE,
+        ${JSON.stringify([200, 100, 50, 20, 10])},
+        TRUE,
+        5,
+        NULL,
+        NULL
+      )
+      ON CONFLICT (channel_id) DO UPDATE
+      SET
+        enabled = EXCLUDED.enabled,
+        allowed_face_values_json = EXCLUDED.allowed_face_values_json,
+        prefer_max_single_face_value = EXCLUDED.prefer_max_single_face_value,
+        max_split_pieces = EXCLUDED.max_split_pieces,
+        province_override = EXCLUDED.province_override,
+        carrier_override = EXCLUDED.carrier_override,
+        updated_at = NOW()
+    `;
+
+    await tx`
       INSERT INTO supplier.suppliers (
         id,
         supplier_code,
         supplier_name,
+        contact_name,
+        contact_phone,
+        contact_email,
+        base_url,
         protocol_type,
+        credential_mode,
+        access_account,
+        access_password_encrypted,
+        cooperation_status,
+        supports_balance_query,
+        supports_recharge_records,
+        supports_consumption_log,
+        remark,
+        health_status,
+        last_health_check_at,
         status
       )
       VALUES (
         ${seedIds.mockSupplier},
         ${env.seed.supplierCode},
         '模拟供应商',
+        '供应商对接人',
+        '13900139000',
+        'mock-supplier@example.com',
+        'mock://supplier',
         'MOCK',
+        'TOKEN',
+        'mock-account',
+        ${supplierAccessPassword},
+        'ACTIVE',
+        TRUE,
+        TRUE,
+        TRUE,
+        '默认模拟供应商',
+        'HEALTHY',
+        NOW(),
         'ACTIVE'
       )
       ON CONFLICT (supplier_code) DO UPDATE
       SET
         supplier_name = EXCLUDED.supplier_name,
+        contact_name = EXCLUDED.contact_name,
+        contact_phone = EXCLUDED.contact_phone,
+        contact_email = EXCLUDED.contact_email,
+        base_url = EXCLUDED.base_url,
         protocol_type = EXCLUDED.protocol_type,
+        credential_mode = EXCLUDED.credential_mode,
+        access_account = EXCLUDED.access_account,
+        access_password_encrypted = EXCLUDED.access_password_encrypted,
+        cooperation_status = EXCLUDED.cooperation_status,
+        supports_balance_query = EXCLUDED.supports_balance_query,
+        supports_recharge_records = EXCLUDED.supports_recharge_records,
+        supports_consumption_log = EXCLUDED.supports_consumption_log,
+        remark = EXCLUDED.remark,
+        health_status = EXCLUDED.health_status,
+        last_health_check_at = EXCLUDED.last_health_check_at,
         status = EXCLUDED.status,
         updated_at = NOW()
     `;
@@ -539,7 +641,8 @@ export async function runSeed(db: SQL): Promise<void> {
         config_json,
         credential_encrypted,
         callback_secret_encrypted,
-        timeout_ms
+        timeout_ms,
+        updated_by
       )
       VALUES (
         ${seedIds.mockSupplierConfig},
@@ -547,7 +650,8 @@ export async function runSeed(db: SQL): Promise<void> {
         ${JSON.stringify({ mode: 'mock-auto-success' })},
         ${supplierCredential},
         ${supplierCallbackSecret},
-        2000
+        2000,
+        'seed'
       )
       ON CONFLICT (supplier_id) DO UPDATE
       SET
@@ -555,6 +659,7 @@ export async function runSeed(db: SQL): Promise<void> {
         credential_encrypted = EXCLUDED.credential_encrypted,
         callback_secret_encrypted = EXCLUDED.callback_secret_encrypted,
         timeout_ms = EXCLUDED.timeout_ms,
+        updated_by = EXCLUDED.updated_by,
         updated_at = NOW()
     `;
 
@@ -563,20 +668,62 @@ export async function runSeed(db: SQL): Promise<void> {
         id,
         supplier_code,
         supplier_name,
+        contact_name,
+        contact_phone,
+        contact_email,
+        base_url,
         protocol_type,
+        credential_mode,
+        access_account,
+        access_password_encrypted,
+        cooperation_status,
+        supports_balance_query,
+        supports_recharge_records,
+        supports_consumption_log,
+        remark,
+        health_status,
+        last_health_check_at,
         status
       )
       VALUES (
         ${seedIds.shenzhenKefeiSupplier},
         'shenzhen-kefei',
         '深圳科飞',
+        '科飞对接',
+        '13700137000',
+        'kefei@example.com',
+        'http://api.sohan.hk:50080/API',
         'SOHAN_API',
+        'JSON',
+        'JG18948358181',
+        ${shenzhenKefeiAccessPassword},
+        'ACTIVE',
+        TRUE,
+        TRUE,
+        FALSE,
+        '真实协议示例供应商',
+        'HEALTHY',
+        NOW(),
         'ACTIVE'
       )
       ON CONFLICT (supplier_code) DO UPDATE
       SET
         supplier_name = EXCLUDED.supplier_name,
+        contact_name = EXCLUDED.contact_name,
+        contact_phone = EXCLUDED.contact_phone,
+        contact_email = EXCLUDED.contact_email,
+        base_url = EXCLUDED.base_url,
         protocol_type = EXCLUDED.protocol_type,
+        credential_mode = EXCLUDED.credential_mode,
+        access_account = EXCLUDED.access_account,
+        access_password_encrypted = EXCLUDED.access_password_encrypted,
+        cooperation_status = EXCLUDED.cooperation_status,
+        supports_balance_query = EXCLUDED.supports_balance_query,
+        supports_recharge_records = EXCLUDED.supports_recharge_records,
+        supports_consumption_log = EXCLUDED.supports_consumption_log,
+        remark = EXCLUDED.remark,
+        health_status = EXCLUDED.health_status,
+        last_health_check_at = EXCLUDED.last_health_check_at,
         status = EXCLUDED.status,
         updated_at = NOW()
     `;
@@ -588,17 +735,17 @@ export async function runSeed(db: SQL): Promise<void> {
         config_json,
         credential_encrypted,
         callback_secret_encrypted,
-        timeout_ms
+        timeout_ms,
+        updated_by
       )
       VALUES (
         ${seedIds.shenzhenKefeiSupplierConfig},
         ${seedIds.shenzhenKefeiSupplier},
-        ${JSON.stringify({
-          baseUrl: 'http://api.sohan.hk:50080/API',
-        })},
+        ${JSON.stringify({ baseUrl: 'http://api.sohan.hk:50080/API' })},
         ${shenzhenKefeiCredential},
         ${shenzhenKefeiCallbackSecret},
-        3000
+        3000,
+        'seed'
       )
       ON CONFLICT (supplier_id) DO UPDATE
       SET
@@ -606,6 +753,7 @@ export async function runSeed(db: SQL): Promise<void> {
         credential_encrypted = EXCLUDED.credential_encrypted,
         callback_secret_encrypted = EXCLUDED.callback_secret_encrypted,
         timeout_ms = EXCLUDED.timeout_ms,
+        updated_by = EXCLUDED.updated_by,
         updated_at = NOW()
     `;
 
@@ -638,6 +786,135 @@ export async function runSeed(db: SQL): Promise<void> {
     await seedFixedRechargeCatalog(tx);
 
     await tx`
+      INSERT INTO supplier.supplier_balance_snapshots (
+        id,
+        supplier_id,
+        balance_amount,
+        currency,
+        balance_status,
+        source_type,
+        queried_at,
+        raw_payload_json
+      )
+      VALUES (
+        'seed-supplier-balance-mock',
+        ${seedIds.mockSupplier},
+        100000,
+        'CNY',
+        'AVAILABLE',
+        'API_QUERY',
+        NOW(),
+        ${JSON.stringify({ source: 'seed' })}
+      )
+      ON CONFLICT (id) DO UPDATE
+      SET
+        balance_amount = EXCLUDED.balance_amount,
+        queried_at = EXCLUDED.queried_at,
+        raw_payload_json = EXCLUDED.raw_payload_json
+    `;
+
+    await tx`
+      INSERT INTO supplier.supplier_health_checks (
+        id,
+        supplier_id,
+        health_status,
+        http_status,
+        message,
+        last_success_at,
+        checked_at
+      )
+      VALUES (
+        'seed-supplier-health-mock',
+        ${seedIds.mockSupplier},
+        'HEALTHY',
+        200,
+        'seed ok',
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (id) DO UPDATE
+      SET
+        health_status = EXCLUDED.health_status,
+        http_status = EXCLUDED.http_status,
+        message = EXCLUDED.message,
+        last_success_at = EXCLUDED.last_success_at,
+        checked_at = EXCLUDED.checked_at
+    `;
+
+    await tx`
+      INSERT INTO supplier.supplier_consumption_logs (
+        id,
+        supplier_id,
+        mobile,
+        order_no,
+        supplier_order_no,
+        amount,
+        status,
+        occurred_at,
+        raw_payload_json
+      )
+      VALUES (
+        'seed-supplier-consumption-mock',
+        ${seedIds.mockSupplier},
+        '13800138000',
+        NULL,
+        NULL,
+        10,
+        'SUCCESS',
+        NOW(),
+        ${JSON.stringify({ source: 'seed' })}
+      )
+      ON CONFLICT (id) DO UPDATE
+      SET
+        amount = EXCLUDED.amount,
+        status = EXCLUDED.status,
+        occurred_at = EXCLUDED.occurred_at,
+        raw_payload_json = EXCLUDED.raw_payload_json
+    `;
+
+    await tx`
+      INSERT INTO supplier.supplier_recharge_records (
+        id,
+        supplier_id,
+        recharge_type,
+        amount,
+        currency,
+        before_balance,
+        after_balance,
+        record_source,
+        supplier_trade_no,
+        remark,
+        raw_payload_json,
+        status,
+        operator_username,
+        synced_at
+      )
+      VALUES (
+        'seed-supplier-recharge-mock',
+        ${seedIds.mockSupplier},
+        'BALANCE_RECHARGE',
+        1000,
+        'CNY',
+        99000,
+        100000,
+        'MANUAL_INPUT',
+        'seed-supplier-trade',
+        'seed recharge',
+        ${JSON.stringify({ source: 'seed' })},
+        'SUCCESS',
+        'seed',
+        NOW()
+      )
+      ON CONFLICT (id) DO UPDATE
+      SET
+        amount = EXCLUDED.amount,
+        before_balance = EXCLUDED.before_balance,
+        after_balance = EXCLUDED.after_balance,
+        raw_payload_json = EXCLUDED.raw_payload_json,
+        synced_at = EXCLUDED.synced_at
+    `;
+
+    await tx`
       INSERT INTO ledger.accounts (
         id,
         owner_type,
@@ -657,6 +934,43 @@ export async function runSeed(db: SQL): Promise<void> {
         frozen_balance = EXCLUDED.frozen_balance,
         status = EXCLUDED.status,
         updated_at = NOW()
+    `;
+
+    await tx`
+      INSERT INTO channel.channel_recharge_records (
+        id,
+        channel_id,
+        account_id,
+        amount,
+        before_balance,
+        after_balance,
+        currency,
+        record_source,
+        remark,
+        operator_username,
+        reference_no,
+        raw_payload_json
+      )
+      VALUES (
+        'seed-channel-recharge-demo',
+        ${seedIds.demoChannel},
+        ${seedIds.channelAccount},
+        10000,
+        0,
+        10000,
+        'CNY',
+        'SEED',
+        'seed recharge',
+        'seed',
+        'seed-channel-recharge-ref',
+        ${JSON.stringify({ source: 'seed' })}
+      )
+      ON CONFLICT (reference_no) DO UPDATE
+      SET
+        amount = EXCLUDED.amount,
+        before_balance = EXCLUDED.before_balance,
+        after_balance = EXCLUDED.after_balance,
+        raw_payload_json = EXCLUDED.raw_payload_json
     `;
   });
 }

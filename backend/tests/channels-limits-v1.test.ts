@@ -260,5 +260,5 @@ test('渠道销售价低于采购价时会拒绝下单', async () => {
   const text = await response.text();
 
   expect(response.status).toBe(400);
-  expect(text).toContain('渠道销售价不得低于采购价');
+  expect(text).toContain('渠道销售总价不得低于采购总价');
 });

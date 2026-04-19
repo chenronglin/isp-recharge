@@ -83,6 +83,8 @@ export const env = {
     adminPassword: Bun.env.SEED_ADMIN_PASSWORD ?? 'Admin123!',
     adminDisplayName: Bun.env.SEED_ADMIN_DISPLAY_NAME ?? '平台超级管理员',
     channelCode: Bun.env.SEED_CHANNEL_CODE ?? 'demo-channel',
+    channelPortalAccount: Bun.env.SEED_CHANNEL_PORTAL_ACCOUNT ?? 'demo.portal',
+    channelPortalPassword: Bun.env.SEED_CHANNEL_PORTAL_PASSWORD ?? 'Portal123!',
     accessKey: Bun.env.SEED_ACCESS_KEY ?? 'demo-access-key',
     secretKey: Bun.env.SEED_SECRET_KEY ?? 'demo-secret-key',
     supplierCode: Bun.env.SEED_SUPPLIER_CODE ?? 'mock-supplier',

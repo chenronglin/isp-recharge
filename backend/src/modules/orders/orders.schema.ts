@@ -9,6 +9,48 @@ export const CreateOrderBodySchema = t.Object({
   ext: t.Optional(t.Record(t.String(), t.Unknown())),
 });
 
+export const PreviewSplitBodySchema = t.Object({
+  mobile: t.String({ pattern: '^\\d{11}$' }),
+  faceValue: t.Number({ minimum: 1 }),
+  productType: t.Optional(t.Union([t.Literal('FAST'), t.Literal('MIXED')])),
+});
+
+export const OpenOrdersListQuerySchema = t.Object({
+  pageNum: t.Optional(t.Numeric({ minimum: 1, default: 1 })),
+  pageSize: t.Optional(t.Numeric({ minimum: 1, maximum: 100, default: 20 })),
+  orderNo: t.Optional(t.String({ minLength: 1 })),
+  channelOrderNo: t.Optional(t.String({ minLength: 1 })),
+  mobile: t.Optional(t.String({ pattern: '^\\d{11}$' })),
+  mainStatus: t.Optional(t.String({ minLength: 1 })),
+  supplierStatus: t.Optional(t.String({ minLength: 1 })),
+  refundStatus: t.Optional(t.String({ minLength: 1 })),
+  startTime: t.Optional(t.String({ format: 'date-time' })),
+  endTime: t.Optional(t.String({ format: 'date-time' })),
+});
+
+export const ManualStatusBodySchema = t.Object({
+  mainStatus: t.String({ minLength: 1 }),
+  supplierStatus: t.Optional(t.String({ minLength: 1 })),
+  refundStatus: t.Optional(t.String({ minLength: 1 })),
+  remark: t.Optional(t.String()),
+});
+
+export const BatchOrdersBodySchema = t.Object({
+  orders: t.Array(
+    t.Object({
+      channelOrderNo: t.String({ minLength: 1 }),
+      mobile: t.String({ pattern: '^\\d{11}$' }),
+      faceValue: t.Number({ minimum: 1 }),
+      productType: t.Optional(t.Union([t.Literal('FAST'), t.Literal('MIXED')])),
+      ext: t.Optional(t.Record(t.String(), t.Unknown())),
+    }),
+  ),
+});
+
+export const BatchImportBodySchema = t.Object({
+  content: t.String({ minLength: 1 }),
+});
+
 export const RemarkBodySchema = t.Object({
   remark: t.String({ minLength: 1 }),
 });
@@ -57,7 +99,7 @@ export const AdminOrderListItemSchema = t.Object({
   orderNo: t.String(),
   channelOrderNo: t.String(),
   channelId: t.String(),
-  productId: t.String(),
+  productId: t.Nullable(t.String()),
   mobile: t.String(),
   province: t.Nullable(t.String()),
   ispName: t.Nullable(t.String()),
@@ -98,7 +140,7 @@ export const AdminOrderDetailSchema = t.Object({
     mobile: t.String(),
     province: t.Nullable(t.String()),
     ispName: t.Nullable(t.String()),
-    productId: t.String(),
+    productId: t.Nullable(t.String()),
     requestedProductType: t.String(),
     faceValueAmountFen: t.Number(),
     createdAt: t.String({ format: 'date-time' }),

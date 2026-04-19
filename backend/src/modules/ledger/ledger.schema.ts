@@ -11,6 +11,9 @@ export const AccountsListQuerySchema = t.Object({
   pageSize: t.Optional(t.Numeric({ minimum: 1, maximum: 100, default: 20 })),
   keyword: t.Optional(t.String({ minLength: 1 })),
   status: t.Optional(t.String({ minLength: 1 })),
+  ownerType: t.Optional(t.String({ minLength: 1 })),
+  ownerId: t.Optional(t.String({ minLength: 1 })),
+  currency: t.Optional(t.String({ minLength: 1 })),
   sortBy: t.Optional(t.String({ minLength: 1 })),
   sortOrder: t.Optional(SortOrderSchema),
 });
@@ -27,8 +30,13 @@ export const LedgerEntriesListQuerySchema = t.Object({
   accountId: t.Optional(t.String({ minLength: 1 })),
   orderNo: t.Optional(t.String({ minLength: 1 })),
   channelId: t.Optional(t.String({ minLength: 1 })),
+  ownerType: t.Optional(t.String({ minLength: 1 })),
+  ownerId: t.Optional(t.String({ minLength: 1 })),
   entryType: t.Optional(t.String({ minLength: 1 })),
+  direction: t.Optional(t.String({ minLength: 1 })),
   bizNo: t.Optional(t.String({ minLength: 1 })),
+  referenceType: t.Optional(t.String({ minLength: 1 })),
+  referenceNo: t.Optional(t.String({ minLength: 1 })),
 });
 
 export const AccountSchema = t.Object({
@@ -47,6 +55,8 @@ export const LedgerEntrySchema = t.Object({
   id: t.String(),
   ledgerNo: t.String(),
   accountId: t.String(),
+  ownerType: t.Nullable(t.String()),
+  ownerId: t.Nullable(t.String()),
   orderNo: t.Nullable(t.String()),
   actionType: t.String(),
   direction: t.String(),

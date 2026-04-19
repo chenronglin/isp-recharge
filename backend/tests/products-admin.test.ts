@@ -261,13 +261,13 @@ describe('平台商品后台维护', () => {
     );
     const openListPayload = (await openListResponse.json()) as {
       code: number;
-      data: Array<{ productCode: string }>;
+      data: Array<{ productId: string }>;
     };
 
     expect(openListResponse.status).toBe(200);
     expect(openListPayload.code).toBe(0);
     expect(openListPayload.data.length).toBe(FIXED_RECHARGE_PRODUCT_COUNT - 1);
-    expect(openListPayload.data.map((item) => item.productCode)).not.toContain(productCode);
+    expect(openListPayload.data.map((item) => item.productId)).not.toContain(productId);
   });
 
   test('PUT /admin/products/:productId 会拦截重复的 productCode', async () => {

@@ -23,10 +23,13 @@ export type RequestedProductType = 'FAST' | 'MIXED';
 
 export interface OrderRecord {
   id: string;
+  orderGroupId?: string;
   orderNo: string;
+  parentOrderNo?: string | null;
   channelOrderNo: string;
   channelId: string;
   parentChannelId: string | null;
+  supplierId?: string | null;
   mobile: string;
   province: string | null;
   ispName: string | null;
@@ -38,6 +41,8 @@ export interface OrderRecord {
   currency: string;
   mainStatus: MainOrderStatus;
   paymentStatus?: string | null;
+  pieceNo?: number;
+  pieceCount?: number;
   supplierStatus: SupplierOrderStatus;
   notifyStatus: OrderNotifyStatus;
   refundStatus: OrderRefundStatus;
@@ -56,6 +61,59 @@ export interface OrderRecord {
   updatedAt: string;
   warningDeadlineAt: string | null;
   expireDeadlineAt: string | null;
+  finishedAt: string | null;
+}
+
+export interface OrderGroupRecord {
+  id: string;
+  orderNo: string;
+  channelOrderNo: string;
+  channelId: string;
+  mobile: string;
+  carrierCode: string | null;
+  province: string | null;
+  faceValueTotal: number;
+  requestedProductType: RequestedProductType;
+  totalSalePrice: number;
+  totalPurchasePrice: number;
+  currency: string;
+  mainStatus: MainOrderStatus;
+  supplierStatus: SupplierOrderStatus;
+  notifyStatus: OrderNotifyStatus;
+  refundStatus: OrderRefundStatus;
+  monitorStatus: OrderMonitorStatus;
+  failedReason: string | null;
+  callbackUrl: string | null;
+  splitResultJson: Record<string, unknown>;
+  extJson: Record<string, unknown>;
+  requestId: string;
+  createdAt: string;
+  updatedAt: string;
+  finishedAt: string | null;
+}
+
+export interface OrderPieceRecord {
+  orderNo: string;
+  parentOrderNo: string | null;
+  channelOrderNo: string;
+  channelId: string;
+  supplierId: string | null;
+  productId: string;
+  pieceNo: number;
+  pieceCount: number;
+  faceValue: number;
+  salePrice: number;
+  purchasePrice: number;
+  mainStatus: MainOrderStatus;
+  supplierStatus: SupplierOrderStatus;
+  refundStatus: OrderRefundStatus;
+  notifyStatus: OrderNotifyStatus;
+  monitorStatus: OrderMonitorStatus;
+  remark: string | null;
+  exceptionTag: string | null;
+  supplierOrderNo: string | null;
+  createdAt: string;
+  updatedAt: string;
   finishedAt: string | null;
 }
 
@@ -81,7 +139,7 @@ export interface OpenOrderRecord {
   province: string | null;
   ispName: string | null;
   faceValue: number;
-  matchedProductId: string;
+  matchedProductId: string | null;
   salePrice: number;
   currency: string;
   mainStatus: MainOrderStatus;

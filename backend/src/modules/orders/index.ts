@@ -29,6 +29,7 @@ export function createOrdersModule(input: {
   const repository = new OrdersRepository();
   const service = new OrdersService(
     repository,
+    input.channelsService,
     input.channelContract,
     input.productContract,
     input.riskContract,

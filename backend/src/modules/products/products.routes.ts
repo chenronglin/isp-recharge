@@ -18,6 +18,8 @@ import type { IamService } from '@/modules/iam/iam.service';
 import {
   AdminProductsQuerySchema,
   AdminRechargeProductSchema,
+  OpenProductsQuerySchema,
+  OpenRechargeProductSchema,
   ProductIdParamsSchema,
   RechargeProductTypeSchema,
   SaveRechargeProductBodySchema,
@@ -35,6 +37,13 @@ export function createProductsRoutes({
   iamService,
   channelsService,
 }: ProductsRoutesDeps) {
+  const carrierNames: Record<string, string> = {
+    CMCC: '中国移动',
+    CTCC: '中国电信',
+    CUCC: '中国联通',
+    CBN: '中国广电',
+  };
+
   const adminRoutes = new Elysia()
     .get(
       '/admin/products',
@@ -192,25 +201,55 @@ export function createProductsRoutes({
 
   const openRoutes = new Elysia({ prefix: '/open-api/products' }).get(
     '/',
-    async ({ request }) => {
+    async ({ query, request }) => {
       const requestId = getRequestIdFromRequest(request);
-      await channelsService.authenticateOpenRequest({
-        accessKey: request.headers.get('AccessKey') ?? '',
-        signature: request.headers.get('Sign') ?? '',
-        timestamp: request.headers.get('Timestamp') ?? '',
-        nonce: request.headers.get('Nonce') ?? '',
+      const auth = await channelsService.resolveChannelAuthContext({
+        authorization: request.headers.get('authorization'),
+        accessKey: request.headers.get('AccessKey') ?? request.headers.get('accesskey') ?? '',
+        signature: request.headers.get('Sign') ?? request.headers.get('sign') ?? '',
+        timestamp: request.headers.get('Timestamp') ?? request.headers.get('timestamp') ?? '',
+        nonce: request.headers.get('Nonce') ?? request.headers.get('nonce') ?? '',
         method: request.method,
         path: new URL(request.url).pathname,
         bodyText: '',
       });
 
-      return ok(requestId, await productsService.listProducts());
+      const [products, splitPolicy] = await Promise.all([
+        channelsService.listChannelProducts(auth.channel.id, {
+          carrierCode: typeof query.carrierCode === 'string' ? query.carrierCode : undefined,
+          province: typeof query.province === 'string' ? query.province : undefined,
+          faceValue: query.faceValue ? Number(query.faceValue) : undefined,
+          productType: typeof query.productType === 'string' ? query.productType : undefined,
+          status: typeof query.status === 'string' ? query.status : 'ACTIVE',
+        }),
+        channelsService.getSplitPolicy(auth.channel.id),
+      ]);
+
+      return ok(
+        requestId,
+        products.map((item) => ({
+          productId: item.productId,
+          productName: item.productName,
+          faceValueFen: item.faceValueFen,
+          salePriceFen: item.salePriceFen,
+          rechargeRange: [item.faceValueFen],
+          arrivalSla: 'T+0',
+          carrierCode: item.carrierCode,
+          operator: carrierNames[item.carrierCode] ?? item.carrierCode,
+          routeStatus: item.status,
+          splitSupport:
+            splitPolicy.enabled &&
+            splitPolicy.allowedFaceValues.some((faceValue) => faceValue * 100 === item.faceValueFen),
+        })),
+      );
     },
     {
+      query: OpenProductsQuerySchema,
+      response: createSuccessResponseSchema(t.Array(OpenRechargeProductSchema)),
       detail: {
         tags: ['open-api'],
         summary: '列出可售充值商品',
-        description: '渠道侧获取当前可售 ISP 充值商品列表。',
+        description: '渠道侧按当前登录渠道列出商品、售价、路由状态和拆单支持能力。',
       },
     },
   );

@@ -2,8 +2,24 @@ export interface Supplier {
   id: string;
   supplierCode: string;
   supplierName: string;
+  contactName: string | null;
+  contactPhone: string | null;
+  contactEmail: string | null;
+  baseUrl: string | null;
   protocolType: string;
+  credentialMode: string;
+  accessAccount: string | null;
+  accessPasswordEncrypted: string | null;
+  cooperationStatus: string;
+  supportsBalanceQuery: boolean;
+  supportsRechargeRecords: boolean;
+  supportsConsumptionLog: boolean;
+  remark: string | null;
+  healthStatus: string;
+  lastHealthCheckAt: string | null;
   status: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export interface SupplierConfig {
@@ -13,6 +29,9 @@ export interface SupplierConfig {
   credentialEncrypted: string;
   callbackSecretEncrypted: string;
   timeoutMs: number;
+  updatedBy?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface SupplierOrder {
@@ -114,4 +133,67 @@ export interface SupplierReconcileDiff {
   status: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface SupplierBalanceSnapshot {
+  id: string;
+  supplierId: string;
+  balanceAmount: number;
+  currency: string;
+  balanceStatus: string;
+  sourceType: string;
+  queriedAt: string;
+  rawPayloadJson: Record<string, unknown>;
+}
+
+export interface SupplierHealthCheck {
+  id: string;
+  supplierId: string;
+  healthStatus: string;
+  httpStatus: number | null;
+  message: string | null;
+  lastSuccessAt: string | null;
+  lastFailureAt: string | null;
+  checkedAt: string;
+}
+
+export interface SupplierConsumptionLog {
+  id: string;
+  supplierId: string;
+  mobile: string;
+  orderNo: string | null;
+  supplierOrderNo: string | null;
+  amount: number;
+  status: string;
+  occurredAt: string;
+  rawPayloadJson: Record<string, unknown>;
+}
+
+export interface SupplierRechargeRecord {
+  id: string;
+  supplierId: string;
+  rechargeType: string;
+  amount: number;
+  currency: string;
+  beforeBalance: number;
+  afterBalance: number;
+  recordSource: string;
+  supplierTradeNo: string | null;
+  remark: string | null;
+  rawPayloadJson: Record<string, unknown>;
+  status: string;
+  operatorUserId: string | null;
+  operatorUsername: string | null;
+  syncedAt: string | null;
+  createdAt: string;
+}
+
+export interface SupplierBalanceView {
+  supplierId: string;
+  balanceAmountFen: number;
+  currency: string;
+  balanceStatus: string;
+  sourceType: string;
+  queriedAt: string;
+  rawPayload: Record<string, unknown>;
 }

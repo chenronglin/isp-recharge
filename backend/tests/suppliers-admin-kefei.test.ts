@@ -30,12 +30,20 @@ describe('createSuppliersRoutes admin kefei apis', () => {
         async getSupplierBalance(input: { supplierId: string }) {
           expect(input.supplierId).toBe('supplier-kefei');
           return {
-            errorCode: 1,
-            errorDesc: 'success',
-            agentAccount: 'JG18948358181',
-            agentName: '深圳科飞',
-            agentBalance: 188.6,
-            agentProfit: 23.4,
+            supplierId: 'supplier-kefei',
+            balanceAmountFen: 18860,
+            currency: 'CNY',
+            balanceStatus: 'AVAILABLE',
+            sourceType: 'API_QUERY',
+            queriedAt: '2026-04-03T10:00:00.000Z',
+            rawPayload: {
+              errorCode: 1,
+              errorDesc: 'success',
+              agentAccount: 'JG18948358181',
+              agentName: '深圳科飞',
+              agentBalance: 188.6,
+              agentProfit: 23.4,
+            },
           };
         },
       } as never,
@@ -62,16 +70,26 @@ describe('createSuppliersRoutes admin kefei apis', () => {
     const payload = (await response.json()) as {
       code: number;
       data: {
-        agentAccount: string;
-        agentBalance: number;
+        supplierId: string;
+        balanceAmountFen: number;
+        currency: string;
+        rawPayload: {
+          agentAccount: string;
+          agentBalance: number;
+        };
       };
     };
 
     expect(response.status).toBe(200);
     expect(payload.code).toBe(0);
     expect(payload.data).toMatchObject({
-      agentAccount: 'JG18948358181',
-      agentBalance: 188.6,
+      supplierId: 'supplier-kefei',
+      balanceAmountFen: 18860,
+      currency: 'CNY',
+      rawPayload: {
+        agentAccount: 'JG18948358181',
+        agentBalance: 188.6,
+      },
     });
   });
 

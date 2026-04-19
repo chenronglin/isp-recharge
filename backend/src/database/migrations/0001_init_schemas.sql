@@ -27,6 +27,8 @@ CREATE TABLE iam.admin_users (
   mobile TEXT,
   email TEXT,
   last_login_at TIMESTAMPTZ,
+  failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -70,15 +72,39 @@ CREATE TABLE iam.login_sessions (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE iam.login_logs (
+  id TEXT PRIMARY KEY,
+  user_id TEXT,
+  username TEXT NOT NULL,
+  ip TEXT NOT NULL,
+  device_summary TEXT NOT NULL DEFAULT '',
+  result TEXT NOT NULL,
+  failure_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE channel.channels (
   id TEXT PRIMARY KEY,
   channel_code TEXT NOT NULL UNIQUE,
   channel_name TEXT NOT NULL,
   channel_type TEXT NOT NULL DEFAULT 'API',
-  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  contact_name TEXT,
+  contact_phone TEXT,
+  contact_email TEXT,
+  base_url TEXT,
+  protocol_type TEXT NOT NULL DEFAULT 'REST',
+  access_account TEXT,
+  access_password_hash TEXT,
+  failed_login_attempts INTEGER NOT NULL DEFAULT 0,
+  locked_until TIMESTAMPTZ,
+  cooperation_status TEXT NOT NULL DEFAULT 'ACTIVE',
+  supports_consumption_log BOOLEAN NOT NULL DEFAULT FALSE,
   settlement_mode TEXT NOT NULL DEFAULT 'PREPAID',
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  remark TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (access_account)
 );
 
 CREATE TABLE channel.channel_api_credentials (
@@ -149,6 +175,57 @@ CREATE TABLE channel.channel_request_nonces (
   UNIQUE (access_key, nonce)
 );
 
+CREATE TABLE channel.portal_login_sessions (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  access_token_hash TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'ACTIVE',
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE channel.portal_login_logs (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT,
+  username TEXT NOT NULL,
+  ip TEXT NOT NULL,
+  device_summary TEXT NOT NULL DEFAULT '',
+  result TEXT NOT NULL,
+  failure_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE channel.channel_recharge_records (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL,
+  account_id TEXT,
+  amount NUMERIC(18, 2) NOT NULL,
+  before_balance NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  after_balance NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'CNY',
+  record_source TEXT NOT NULL DEFAULT 'MANUAL_RECHARGE',
+  remark TEXT,
+  operator_user_id TEXT,
+  operator_username TEXT,
+  reference_no TEXT NOT NULL UNIQUE,
+  raw_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE channel.channel_split_policies (
+  id TEXT PRIMARY KEY,
+  channel_id TEXT NOT NULL UNIQUE,
+  enabled BOOLEAN NOT NULL DEFAULT TRUE,
+  allowed_face_values_json JSONB NOT NULL DEFAULT '[]'::jsonb,
+  prefer_max_single_face_value BOOLEAN NOT NULL DEFAULT TRUE,
+  max_split_pieces INTEGER NOT NULL DEFAULT 5,
+  province_override TEXT,
+  carrier_override TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
 CREATE TABLE product.mobile_segments (
   id TEXT PRIMARY KEY,
   mobile_prefix TEXT NOT NULL UNIQUE,
@@ -170,6 +247,8 @@ CREATE TABLE product.recharge_products (
   recharge_mode TEXT NOT NULL,
   sales_unit TEXT NOT NULL DEFAULT 'CNY',
   status TEXT NOT NULL DEFAULT 'ACTIVE',
+  arrival_sla TEXT NOT NULL DEFAULT 'T+0',
+  recharge_range_json JSONB NOT NULL DEFAULT '[]'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -203,13 +282,45 @@ CREATE TABLE product.product_sync_logs (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE ordering.orders (
+CREATE TABLE ordering.order_groups (
   id TEXT PRIMARY KEY,
   order_no TEXT NOT NULL UNIQUE,
   channel_order_no TEXT NOT NULL,
   channel_id TEXT NOT NULL,
+  mobile_number TEXT NOT NULL,
+  carrier_code TEXT,
+  province_name TEXT,
+  face_value_total NUMERIC(18, 2) NOT NULL,
+  requested_product_type TEXT NOT NULL DEFAULT 'MIXED',
+  total_sale_price NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  total_purchase_price NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'CNY',
+  main_status TEXT NOT NULL,
+  supplier_status TEXT NOT NULL,
+  notify_status TEXT NOT NULL,
+  refund_status TEXT NOT NULL DEFAULT 'NONE',
+  monitor_status TEXT NOT NULL DEFAULT 'NORMAL',
+  failed_reason TEXT,
+  callback_url TEXT,
+  split_result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  ext_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  request_id TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  finished_at TIMESTAMPTZ,
+  UNIQUE (channel_id, channel_order_no)
+);
+
+CREATE TABLE ordering.orders (
+  id TEXT PRIMARY KEY,
+  order_group_id TEXT NOT NULL,
+  order_no TEXT NOT NULL UNIQUE,
+  parent_order_no TEXT NOT NULL,
+  channel_order_no TEXT NOT NULL,
+  channel_id TEXT NOT NULL,
   parent_channel_id TEXT,
   product_id TEXT NOT NULL,
+  supplier_id TEXT,
   mobile_number TEXT NOT NULL,
   province_name TEXT,
   isp_code TEXT,
@@ -218,6 +329,8 @@ CREATE TABLE ordering.orders (
   cost_price NUMERIC(18, 2) NOT NULL,
   currency TEXT NOT NULL DEFAULT 'CNY',
   payment_mode TEXT NOT NULL DEFAULT 'BALANCE',
+  piece_no INTEGER NOT NULL DEFAULT 1,
+  piece_count INTEGER NOT NULL DEFAULT 1,
   main_status TEXT NOT NULL,
   payment_status TEXT NOT NULL,
   supplier_status TEXT NOT NULL,
@@ -242,13 +355,13 @@ CREATE TABLE ordering.orders (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   paid_at TIMESTAMPTZ,
-  finished_at TIMESTAMPTZ,
-  UNIQUE (channel_id, channel_order_no)
+  finished_at TIMESTAMPTZ
 );
 
 CREATE TABLE ordering.order_events (
   id TEXT PRIMARY KEY,
   order_no TEXT NOT NULL,
+  parent_order_no TEXT,
   event_type TEXT NOT NULL,
   source_service TEXT NOT NULL,
   source_no TEXT,
@@ -264,7 +377,21 @@ CREATE TABLE supplier.suppliers (
   id TEXT PRIMARY KEY,
   supplier_code TEXT NOT NULL UNIQUE,
   supplier_name TEXT NOT NULL,
+  contact_name TEXT,
+  contact_phone TEXT,
+  contact_email TEXT,
+  base_url TEXT,
   protocol_type TEXT NOT NULL,
+  credential_mode TEXT NOT NULL DEFAULT 'TOKEN',
+  access_account TEXT,
+  access_password_encrypted TEXT,
+  cooperation_status TEXT NOT NULL DEFAULT 'ACTIVE',
+  supports_balance_query BOOLEAN NOT NULL DEFAULT TRUE,
+  supports_recharge_records BOOLEAN NOT NULL DEFAULT FALSE,
+  supports_consumption_log BOOLEAN NOT NULL DEFAULT FALSE,
+  remark TEXT,
+  health_status TEXT NOT NULL DEFAULT 'UNKNOWN',
+  last_health_check_at TIMESTAMPTZ,
   status TEXT NOT NULL DEFAULT 'ACTIVE',
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -277,6 +404,7 @@ CREATE TABLE supplier.supplier_configs (
   credential_encrypted TEXT NOT NULL,
   callback_secret_encrypted TEXT NOT NULL,
   timeout_ms INTEGER NOT NULL DEFAULT 3000,
+  updated_by TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -285,6 +413,7 @@ CREATE TABLE supplier.supplier_request_logs (
   id TEXT PRIMARY KEY,
   supplier_id TEXT NOT NULL,
   order_no TEXT,
+  mobile TEXT,
   supplier_product_code TEXT,
   request_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
   response_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -348,6 +477,62 @@ CREATE TABLE supplier.supplier_runtime_breakers (
   recovery_timeout_seconds INTEGER NOT NULL DEFAULT 60,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE supplier.supplier_balance_snapshots (
+  id TEXT PRIMARY KEY,
+  supplier_id TEXT NOT NULL,
+  balance_amount NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  currency TEXT NOT NULL DEFAULT 'CNY',
+  balance_status TEXT NOT NULL DEFAULT 'AVAILABLE',
+  source_type TEXT NOT NULL DEFAULT 'API_QUERY',
+  queried_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  raw_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE supplier.supplier_health_checks (
+  id TEXT PRIMARY KEY,
+  supplier_id TEXT NOT NULL,
+  health_status TEXT NOT NULL,
+  http_status INTEGER,
+  message TEXT,
+  last_success_at TIMESTAMPTZ,
+  last_failure_at TIMESTAMPTZ,
+  checked_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE supplier.supplier_consumption_logs (
+  id TEXT PRIMARY KEY,
+  supplier_id TEXT NOT NULL,
+  mobile TEXT NOT NULL,
+  order_no TEXT,
+  supplier_order_no TEXT,
+  amount NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  status TEXT NOT NULL,
+  occurred_at TIMESTAMPTZ NOT NULL,
+  raw_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE supplier.supplier_recharge_records (
+  id TEXT PRIMARY KEY,
+  supplier_id TEXT NOT NULL,
+  recharge_type TEXT NOT NULL,
+  amount NUMERIC(18, 2) NOT NULL,
+  currency TEXT NOT NULL DEFAULT 'CNY',
+  before_balance NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  after_balance NUMERIC(18, 2) NOT NULL DEFAULT 0,
+  record_source TEXT NOT NULL,
+  supplier_trade_no TEXT,
+  remark TEXT,
+  raw_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'SUCCESS',
+  operator_user_id TEXT,
+  operator_username TEXT,
+  synced_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE TABLE ledger.accounts (
@@ -485,8 +670,53 @@ CREATE TABLE worker.worker_dead_letters (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+CREATE TABLE worker.worker_job_items (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  item_no INTEGER NOT NULL,
+  payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  status TEXT NOT NULL DEFAULT 'PENDING',
+  result_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+  order_no TEXT,
+  failed_reason TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (job_id, item_no)
+);
+
+CREATE TABLE worker.worker_job_artifacts (
+  id TEXT PRIMARY KEY,
+  job_id TEXT NOT NULL,
+  artifact_type TEXT NOT NULL,
+  file_name TEXT NOT NULL,
+  file_path TEXT NOT NULL,
+  download_url TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_iam_login_logs_username_created_at
+  ON iam.login_logs (username, created_at DESC);
+
+CREATE INDEX idx_iam_login_logs_user_id_created_at
+  ON iam.login_logs (user_id, created_at DESC);
+
+CREATE INDEX idx_channel_channels_status_created
+  ON channel.channels (status, created_at DESC);
+
+CREATE INDEX idx_channel_portal_sessions_channel_status
+  ON channel.portal_login_sessions (channel_id, status, expires_at DESC);
+
+CREATE INDEX idx_channel_recharge_records_channel_created
+  ON channel.channel_recharge_records (channel_id, created_at DESC);
+
+CREATE INDEX idx_ordering_order_groups_channel_created
+  ON ordering.order_groups (channel_id, created_at DESC);
+
 CREATE INDEX idx_ordering_orders_channel_created
   ON ordering.orders (channel_id, created_at DESC);
+
+CREATE INDEX idx_ordering_orders_group
+  ON ordering.orders (order_group_id, piece_no ASC);
 
 CREATE INDEX idx_ordering_order_events_order_no
   ON ordering.order_events (order_no, occurred_at DESC);
@@ -496,6 +726,9 @@ CREATE INDEX idx_product_mobile_segments_prefix
 
 CREATE INDEX idx_product_mappings_supplier
   ON product.product_supplier_mappings (supplier_id, priority ASC);
+
+CREATE INDEX idx_supplier_suppliers_status_created
+  ON supplier.suppliers (status, created_at DESC);
 
 CREATE INDEX idx_supplier_request_logs_order
   ON supplier.supplier_request_logs (order_no, created_at DESC);
@@ -508,6 +741,18 @@ CREATE UNIQUE INDEX uq_supplier_reconcile_diffs_dedupe
     diff_type
   );
 
+CREATE INDEX idx_supplier_balance_snapshots_supplier_queried
+  ON supplier.supplier_balance_snapshots (supplier_id, queried_at DESC);
+
+CREATE INDEX idx_supplier_health_checks_supplier_checked
+  ON supplier.supplier_health_checks (supplier_id, checked_at DESC);
+
+CREATE INDEX idx_supplier_consumption_logs_supplier_occurred
+  ON supplier.supplier_consumption_logs (supplier_id, occurred_at DESC);
+
+CREATE INDEX idx_supplier_recharge_records_supplier_created
+  ON supplier.supplier_recharge_records (supplier_id, created_at DESC);
+
 CREATE INDEX idx_ledger_ledgers_order_no
   ON ledger.account_ledgers (order_no, created_at DESC);
 
@@ -516,3 +761,9 @@ CREATE INDEX idx_notification_tasks_order_no
 
 CREATE INDEX idx_worker_jobs_status_next_run
   ON worker.worker_jobs (status, next_run_at);
+
+CREATE INDEX idx_worker_job_items_job
+  ON worker.worker_job_items (job_id, item_no ASC);
+
+CREATE INDEX idx_worker_job_artifacts_job
+  ON worker.worker_job_artifacts (job_id, created_at DESC);

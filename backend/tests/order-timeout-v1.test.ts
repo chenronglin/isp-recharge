@@ -93,6 +93,7 @@ async function resetTestState() {
       supplier.supplier_orders,
       supplier.supplier_request_logs,
       ordering.order_events,
+      ordering.order_groups,
       ordering.orders,
       ledger.account_ledgers
   `;
@@ -294,6 +295,22 @@ async function setOrderState(
       monitor_status = COALESCE(${input.monitorStatus ?? null}, monitor_status),
       warning_deadline_at = COALESCE(${input.warningDeadlineAt ?? null}, warning_deadline_at),
       expire_deadline_at = COALESCE(${input.expireDeadlineAt ?? null}, expire_deadline_at),
+      finished_at = CASE
+        WHEN ${input.finishedAt === null} THEN NULL
+        ELSE COALESCE(${input.finishedAt ?? null}, finished_at)
+      END,
+      updated_at = NOW()
+    WHERE order_no = ${orderNo}
+  `;
+
+  await db`
+    UPDATE ordering.order_groups
+    SET
+      main_status = COALESCE(${input.mainStatus ?? null}, main_status),
+      supplier_status = COALESCE(${input.supplierStatus ?? null}, supplier_status),
+      notify_status = COALESCE(${input.notifyStatus ?? null}, notify_status),
+      refund_status = COALESCE(${input.refundStatus ?? null}, refund_status),
+      monitor_status = COALESCE(${input.monitorStatus ?? null}, monitor_status),
       finished_at = CASE
         WHEN ${input.finishedAt === null} THEN NULL
         ELSE COALESCE(${input.finishedAt ?? null}, finished_at)

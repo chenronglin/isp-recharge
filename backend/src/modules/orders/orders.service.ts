@@ -1,7 +1,11 @@
+import { mkdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { badRequest, forbidden, notFound } from '@/lib/errors';
 import { eventBus } from '@/lib/event-bus';
+import { lookupMobileSegment } from '@/lib/mobile-lookup';
 import { toAmountFen, toIsoDateTime } from '@/lib/utils';
 import type { ChannelContract } from '@/modules/channels/contracts';
+import type { ChannelsService } from '@/modules/channels/channels.service';
 import type { LedgerContract } from '@/modules/ledger/contracts';
 import { NotificationsRepository } from '@/modules/notifications/notifications.repository';
 import { notificationWorkerMaxAttempts } from '@/modules/notifications/retry-policy';
@@ -11,8 +15,10 @@ import type {
   OpenOrderEventRecord,
   OpenOrderRecord,
   OrderEventListFilters,
+  OrderGroupRecord,
   OrderEventRecord,
   OrderListFilters,
+  OrderPieceRecord,
   OrderRecord,
 } from '@/modules/orders/orders.types';
 import type { ProductContract } from '@/modules/products/contracts';
@@ -29,6 +35,23 @@ function isUniqueConstraintViolation(error: unknown): error is { code: string } 
   );
 }
 
+interface SplitCandidate {
+  productId: string;
+  productCode: string | null;
+  productName: string;
+  carrierCode: string;
+  province: string;
+  faceValue: number;
+  productType: string | null;
+  salePrice: number;
+  routeSupplierId: string;
+  routeSupplierName: string | null;
+  routeSupplierProductCode: string;
+  routeCostPrice: number;
+  latestSnapshotAt: string | null;
+  status: string;
+}
+
 export class OrdersService implements OrderContract {
   private readonly notificationsRepository: Pick<
     NotificationsRepository,
@@ -37,6 +60,7 @@ export class OrdersService implements OrderContract {
 
   constructor(
     private readonly repository: OrdersRepository,
+    private readonly channelsService: ChannelsService,
     private readonly channelContract: ChannelContract,
     private readonly productContract: ProductContract,
     private readonly riskContract: RiskContract,
@@ -50,29 +74,53 @@ export class OrdersService implements OrderContract {
     this.notificationsRepository = notificationsRepository;
   }
 
-  private toAdminOrderListItem(order: OrderRecord) {
+  private toAdminOrderListItem(order: OrderGroupRecord) {
     return {
       orderNo: order.orderNo,
       channelOrderNo: order.channelOrderNo,
       channelId: order.channelId,
-      productId: order.matchedProductId,
+      productId: null,
       mobile: order.mobile,
       province: order.province,
-      ispName: order.ispName,
+      ispName: order.carrierCode,
       requestedProductType: order.requestedProductType,
-      faceValueAmountFen: toAmountFen(order.faceValue) ?? 0,
-      saleAmountFen: toAmountFen(order.salePrice) ?? 0,
-      purchaseAmountFen: toAmountFen(order.purchasePrice) ?? 0,
+      faceValueAmountFen: toAmountFen(order.faceValueTotal) ?? 0,
+      saleAmountFen: toAmountFen(order.totalSalePrice) ?? 0,
+      purchaseAmountFen: toAmountFen(order.totalPurchasePrice) ?? 0,
       currency: order.currency,
       mainStatus: order.mainStatus,
       supplierStatus: order.supplierStatus,
       notifyStatus: order.notifyStatus,
       refundStatus: order.refundStatus,
       monitorStatus: order.monitorStatus,
-      exceptionTag: order.exceptionTag,
+      exceptionTag: null,
       createdAt: toIsoDateTime(order.createdAt) ?? order.createdAt,
       updatedAt: toIsoDateTime(order.updatedAt) ?? order.updatedAt,
       finishedAt: toIsoDateTime(order.finishedAt),
+    };
+  }
+
+  private toOrderPieceSummary(piece: OrderPieceRecord) {
+    return {
+      orderNo: piece.orderNo,
+      supplierId: piece.supplierId,
+      productId: piece.productId,
+      pieceNo: piece.pieceNo,
+      pieceCount: piece.pieceCount,
+      supplierOrderNo: piece.supplierOrderNo,
+      faceValueAmountFen: toAmountFen(piece.faceValue) ?? 0,
+      saleAmountFen: toAmountFen(piece.salePrice) ?? 0,
+      purchaseAmountFen: toAmountFen(piece.purchasePrice) ?? 0,
+      mainStatus: piece.mainStatus,
+      supplierStatus: piece.supplierStatus,
+      refundStatus: piece.refundStatus,
+      notifyStatus: piece.notifyStatus,
+      monitorStatus: piece.monitorStatus,
+      remark: piece.remark,
+      exceptionTag: piece.exceptionTag,
+      createdAt: toIsoDateTime(piece.createdAt) ?? piece.createdAt,
+      updatedAt: toIsoDateTime(piece.updatedAt) ?? piece.updatedAt,
+      finishedAt: toIsoDateTime(piece.finishedAt),
     };
   }
 
@@ -92,7 +140,7 @@ export class OrdersService implements OrderContract {
   }
 
   async listOrders(filters: OrderListFilters = {}) {
-    const result = await this.repository.listOrders(filters);
+    const result = await this.repository.listOrderGroups(filters);
 
     return {
       items: result.items.map((item) => this.toAdminOrderListItem(item)),
@@ -100,7 +148,17 @@ export class OrdersService implements OrderContract {
     };
   }
 
-  async getOrderByNo(orderNo: string): Promise<OrderRecord> {
+  private async getOrderGroupByNo(orderNo: string): Promise<OrderGroupRecord> {
+    const order = await this.repository.findGroupByOrderNo(orderNo);
+
+    if (!order) {
+      throw notFound('订单不存在');
+    }
+
+    return order;
+  }
+
+  private async getPieceOrderByNo(orderNo: string): Promise<OrderRecord> {
     const order = await this.repository.findByOrderNo(orderNo);
 
     if (!order) {
@@ -110,13 +168,62 @@ export class OrdersService implements OrderContract {
     return order;
   }
 
+  private toGroupOrderRecord(group: OrderGroupRecord, firstPiece: OrderRecord): OrderRecord {
+    return {
+      ...firstPiece,
+      orderNo: group.orderNo,
+      parentOrderNo: group.orderNo,
+      channelOrderNo: group.channelOrderNo,
+      channelId: group.channelId,
+      mobile: group.mobile,
+      province: group.province,
+      ispName: group.carrierCode,
+      faceValue: group.faceValueTotal,
+      requestedProductType: group.requestedProductType,
+      salePrice: group.totalSalePrice,
+      purchasePrice: group.totalPurchasePrice,
+      currency: group.currency,
+      mainStatus: group.mainStatus,
+      supplierStatus: group.supplierStatus,
+      notifyStatus: group.notifyStatus,
+      refundStatus: group.refundStatus,
+      monitorStatus: group.monitorStatus,
+      remark: group.failedReason,
+      extJson: group.extJson,
+      createdAt: group.createdAt,
+      updatedAt: group.updatedAt,
+      finishedAt: group.finishedAt,
+    };
+  }
+
+  async getOrderByNo(orderNo: string): Promise<OrderRecord> {
+    const group = await this.repository.findGroupByOrderNo(orderNo);
+
+    if (group) {
+      const pieces = await this.repository.listPieceOrders(group.orderNo);
+      const firstPiece = pieces[0] ? await this.getPieceOrderByNo(pieces[0].orderNo) : null;
+
+      if (!firstPiece) {
+        throw notFound('订单不存在');
+      }
+
+      return this.toGroupOrderRecord(group, firstPiece);
+    }
+
+    return this.getPieceOrderByNo(orderNo);
+  }
+
   async getAdminOrderDetail(orderNo: string) {
-    const order = await this.getOrderByNo(orderNo);
+    const order = await this.getOrderGroupByNo(orderNo);
+    const pieces = await this.repository.listPieceOrders(order.orderNo);
+    const firstPiece = pieces[0] ? await this.getPieceOrderByNo(pieces[0].orderNo) : null;
     const latestTask = await this.notificationsRepository.findLatestTaskByOrderNo(orderNo);
-    const callbackSnapshot = order.callbackSnapshotJson.callbackConfig as Record<string, unknown> | undefined;
-    const riskSnapshot = order.riskSnapshotJson as Record<string, unknown>;
+    const callbackSnapshot = firstPiece?.callbackSnapshotJson.callbackConfig as
+      | Record<string, unknown>
+      | undefined;
+    const riskSnapshot = (firstPiece?.riskSnapshotJson ?? {}) as Record<string, unknown>;
     const grossProfitAmountFen =
-      toAmountFen(Number(order.salePrice) - Number(order.purchasePrice)) ?? 0;
+      toAmountFen(Number(order.totalSalePrice) - Number(order.totalPurchasePrice)) ?? 0;
 
     return {
       basicInfo: {
@@ -125,30 +232,30 @@ export class OrdersService implements OrderContract {
         channelId: order.channelId,
         mobile: order.mobile,
         province: order.province,
-        ispName: order.ispName,
-        productId: order.matchedProductId,
+        ispName: order.carrierCode,
+        productId: firstPiece?.matchedProductId ?? null,
         requestedProductType: order.requestedProductType,
-        faceValueAmountFen: toAmountFen(order.faceValue) ?? 0,
+        faceValueAmountFen: toAmountFen(order.faceValueTotal) ?? 0,
         createdAt: toIsoDateTime(order.createdAt) ?? order.createdAt,
         updatedAt: toIsoDateTime(order.updatedAt) ?? order.updatedAt,
         finishedAt: toIsoDateTime(order.finishedAt),
       },
       paymentInfo: {
         currency: order.currency,
-        saleAmountFen: toAmountFen(order.salePrice) ?? 0,
-        purchaseAmountFen: toAmountFen(order.purchasePrice) ?? 0,
+        saleAmountFen: toAmountFen(order.totalSalePrice) ?? 0,
+        purchaseAmountFen: toAmountFen(order.totalPurchasePrice) ?? 0,
         grossProfitAmountFen,
-        paymentStatus: order.paymentStatus ?? null,
+        paymentStatus: 'PAID',
         refundStatus: order.refundStatus,
       },
       fulfillmentInfo: {
         mainStatus: order.mainStatus,
         supplierStatus: order.supplierStatus,
         monitorStatus: order.monitorStatus,
-        warningDeadlineAt: toIsoDateTime(order.warningDeadlineAt),
-        expireDeadlineAt: toIsoDateTime(order.expireDeadlineAt),
-        exceptionTag: order.exceptionTag,
-        remark: order.remark,
+        warningDeadlineAt: firstPiece ? toIsoDateTime(firstPiece.warningDeadlineAt) : null,
+        expireDeadlineAt: firstPiece ? toIsoDateTime(firstPiece.expireDeadlineAt) : null,
+        exceptionTag: null,
+        remark: order.failedReason,
       },
       notificationInfo: {
         notifyStatus: order.notifyStatus,
@@ -172,28 +279,34 @@ export class OrdersService implements OrderContract {
         hitRules: Array.isArray(riskSnapshot.hitRules)
           ? riskSnapshot.hitRules.filter((item): item is string => typeof item === 'string')
           : [],
-        snapshot: order.riskSnapshotJson,
+        snapshot: riskSnapshot,
       },
       ledgerInfo: {
         currency: order.currency,
-        saleAmountFen: toAmountFen(order.salePrice) ?? 0,
-        purchaseAmountFen: toAmountFen(order.purchasePrice) ?? 0,
+        saleAmountFen: toAmountFen(order.totalSalePrice) ?? 0,
+        purchaseAmountFen: toAmountFen(order.totalPurchasePrice) ?? 0,
         grossProfitAmountFen,
         refundStatus: order.refundStatus,
       },
       businessSnapshot: {
-        channel: order.channelSnapshotJson,
-        product: order.productSnapshotJson,
-        callback: order.callbackSnapshotJson,
-        supplierRoute: order.supplierRouteSnapshotJson,
-        risk: order.riskSnapshotJson,
+        channel: firstPiece?.channelSnapshotJson ?? {},
+        product: {
+          splitResult: order.splitResultJson,
+          pieces: pieces.map((piece) => this.toOrderPieceSummary(piece)),
+        },
+        callback: firstPiece?.callbackSnapshotJson ?? {},
+        supplierRoute: firstPiece?.supplierRouteSnapshotJson ?? {},
+        risk: firstPiece?.riskSnapshotJson ?? {},
         ext: order.extJson,
       },
     };
   }
 
-  async getOrderByNoForChannel(channelId: string, orderNo: string): Promise<OrderRecord> {
-    const order = await this.repository.findByOrderNoAndChannel(channelId, orderNo);
+  private async getOrderGroupByNoForChannel(
+    channelId: string,
+    orderNo: string,
+  ): Promise<OrderGroupRecord> {
+    const order = await this.repository.findGroupByOrderNoAndChannel(channelId, orderNo);
 
     if (!order) {
       throw notFound('订单不存在');
@@ -203,19 +316,46 @@ export class OrdersService implements OrderContract {
   }
 
   async getSupplierExecutionContext(orderNo: string) {
-    return this.getOrderByNo(orderNo);
+    const piece = await this.repository.findByOrderNo(orderNo);
+
+    if (piece) {
+      return piece;
+    }
+
+    const group = await this.repository.findGroupByOrderNo(orderNo);
+
+    if (!group) {
+      throw notFound('订单不存在');
+    }
+
+    const pieces = await this.repository.listPieceOrders(group.orderNo);
+    const firstPiece = pieces[0] ? await this.getPieceOrderByNo(pieces[0].orderNo) : null;
+
+    if (!firstPiece) {
+      throw notFound('订单子单不存在');
+    }
+
+    return firstPiece;
   }
 
   async getNotificationContext(orderNo: string) {
-    return this.getOrderByNo(orderNo);
+    const group = await this.getOrderGroupByNo(orderNo);
+    const pieces = await this.repository.listPieceOrders(group.orderNo);
+    const firstPiece = pieces[0] ? await this.getPieceOrderByNo(pieces[0].orderNo) : null;
+
+    if (firstPiece) {
+      return this.toGroupOrderRecord(group, firstPiece);
+    }
+
+    throw notFound('订单子单不存在');
   }
 
   async getLedgerContext(orderNo: string) {
-    return this.getOrderByNo(orderNo);
+    return this.getNotificationContext(orderNo);
   }
 
   async listEvents(orderNo: string, filters: OrderEventListFilters = {}) {
-    const result = await this.repository.listEvents(orderNo, filters);
+    const result = await this.repository.listGroupEvents(orderNo, filters);
 
     return {
       items: result.items.map((item) => this.toAdminOrderEventRecord(item)),
@@ -224,8 +364,8 @@ export class OrdersService implements OrderContract {
   }
 
   async listEventsForChannel(channelId: string, orderNo: string) {
-    await this.getOrderByNoForChannel(channelId, orderNo);
-    const result = await this.repository.listEvents(orderNo, {
+    await this.getOrderGroupByNoForChannel(channelId, orderNo);
+    const result = await this.repository.listGroupEvents(orderNo, {
       pageNum: 1,
       pageSize: 200,
       sortBy: 'occurredAt',
@@ -234,16 +374,16 @@ export class OrdersService implements OrderContract {
     return result.items;
   }
 
-  toOpenOrderRecord(order: OrderRecord): OpenOrderRecord {
+  toOpenOrderRecord(order: OrderGroupRecord, pieces: OrderPieceRecord[]): OpenOrderRecord {
     return {
       orderNo: order.orderNo,
       channelOrderNo: order.channelOrderNo,
       mobile: order.mobile,
       province: order.province,
-      ispName: order.ispName,
-      faceValue: order.faceValue,
-      matchedProductId: order.matchedProductId,
-      salePrice: order.salePrice,
+      ispName: order.carrierCode,
+      faceValue: order.faceValueTotal,
+      matchedProductId: pieces[0]?.productId ?? null,
+      salePrice: order.totalSalePrice,
       currency: order.currency,
       mainStatus: order.mainStatus,
       supplierStatus: order.supplierStatus,
@@ -268,7 +408,9 @@ export class OrdersService implements OrderContract {
   }
 
   async getOpenOrderByNoForChannel(channelId: string, orderNo: string): Promise<OpenOrderRecord> {
-    return this.toOpenOrderRecord(await this.getOrderByNoForChannel(channelId, orderNo));
+    const group = await this.getOrderGroupByNoForChannel(channelId, orderNo);
+    const pieces = await this.repository.listPieceOrders(group.orderNo);
+    return this.toOpenOrderRecord(group, pieces);
   }
 
   async listOpenEventsForChannel(
@@ -277,6 +419,716 @@ export class OrdersService implements OrderContract {
   ): Promise<OpenOrderEventRecord[]> {
     const events = await this.listEventsForChannel(channelId, orderNo);
     return events.map((event) => this.toOpenOrderEventRecord(event));
+  }
+
+  async previewSplit(input: {
+    channelId: string;
+    mobile: string;
+    faceValue: number;
+    productType?: RechargeProductType;
+  }) {
+    try {
+      const plan = await this.resolveSplitPlan({
+        channelId: input.channelId,
+        mobile: input.mobile,
+        faceValue: input.faceValue,
+        productType: input.productType ?? 'MIXED',
+      });
+
+      return {
+        matched: true,
+        unmatchedReason: null,
+        usedSplit: plan.usedSplit,
+        supplierId: plan.supplierId ?? plan.pieces[0]?.routeSupplierId ?? null,
+        mobile: plan.mobileContext.mobile,
+        province: plan.mobileContext.province,
+        ispName: plan.mobileContext.ispName,
+        pieces: plan.pieces.map((piece) => ({
+          productId: piece.productId,
+          productName: piece.productName,
+          supplierId: piece.routeSupplierId,
+          supplierName: piece.routeSupplierName,
+          faceValueAmountFen: toAmountFen(piece.faceValue) ?? 0,
+          saleAmountFen: toAmountFen(piece.salePrice) ?? 0,
+          purchaseAmountFen: toAmountFen(piece.routeCostPrice) ?? 0,
+        })),
+      };
+    } catch (error) {
+      return {
+        matched: false,
+        unmatchedReason: error instanceof Error ? error.message : '拆单预览失败',
+        usedSplit: false,
+        supplierId: null,
+        mobile: input.mobile,
+        province: null,
+        ispName: null,
+        pieces: [],
+      };
+    }
+  }
+
+  async listOpenOrders(input: {
+    channelId: string;
+    pageNum: number;
+    pageSize: number;
+    orderNo?: string;
+    channelOrderNo?: string;
+    mobile?: string;
+    mainStatus?: string;
+    supplierStatus?: string;
+    refundStatus?: string;
+    startTime?: string | null;
+    endTime?: string | null;
+  }) {
+    const result = await this.repository.listOrderGroups({
+      pageNum: input.pageNum,
+      pageSize: input.pageSize,
+      channelId: input.channelId,
+      orderNo: input.orderNo,
+      channelOrderNo: input.channelOrderNo,
+      mobile: input.mobile,
+      mainStatus: input.mainStatus,
+      supplierStatus: input.supplierStatus,
+      refundStatus: input.refundStatus,
+      startTime: input.startTime,
+      endTime: input.endTime,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    return {
+      items: result.items.map((item) => this.toOpenOrderRecord(item, [])),
+      total: result.total,
+    };
+  }
+
+  async refreshOrderStatus(orderNo: string) {
+    const group = await this.getOrderGroupByNo(orderNo);
+    const pieces = await this.repository.listPieceOrders(orderNo);
+    let refreshedPieces = 0;
+
+    for (const piece of pieces) {
+      if (
+        piece.supplierOrderNo &&
+        !['SUCCESS', 'REFUNDED', 'CLOSED'].includes(piece.mainStatus) &&
+        piece.supplierStatus !== 'FAIL'
+      ) {
+        refreshedPieces += 1;
+        await this.workerContract.enqueue({
+          jobType: 'supplier.query',
+          businessKey: `${piece.orderNo}:${piece.supplierOrderNo}:manual-refresh`,
+          payload: {
+            orderNo: piece.orderNo,
+            supplierOrderNo: piece.supplierOrderNo,
+            attemptIndex: 1,
+          },
+        });
+      }
+    }
+
+    return {
+      orderNo: group.orderNo,
+      refreshedPieces,
+    };
+  }
+
+  async retryRecharge(orderNo: string) {
+    const group = await this.getOrderGroupByNo(orderNo);
+    const pieces = await this.repository.listPieceOrders(orderNo);
+    let retriedPieces = 0;
+
+    for (const piece of pieces) {
+      if (piece.mainStatus === 'SUCCESS') {
+        continue;
+      }
+
+      retriedPieces += 1;
+      await this.workerContract.enqueue({
+        jobType: 'supplier.submit',
+        businessKey: `${piece.orderNo}:manual-retry`,
+        payload: {
+          orderNo: piece.orderNo,
+        },
+      });
+    }
+
+    return {
+      orderNo: group.orderNo,
+      retriedPieces,
+    };
+  }
+
+  async manualUpdateStatus(input: {
+    orderNo: string;
+    mainStatus: string;
+    supplierStatus?: string;
+    refundStatus?: string;
+    remark?: string;
+    requestId: string;
+  }) {
+    const group = await this.getOrderGroupByNo(input.orderNo);
+    const pieces = await this.repository.listPieceOrders(input.orderNo);
+
+    for (const piece of pieces) {
+      await this.repository.updateStatuses(piece.orderNo, {
+        mainStatus: input.mainStatus as OrderRecord['mainStatus'],
+        supplierStatus:
+          (input.supplierStatus as OrderRecord['supplierStatus']) ?? piece.supplierStatus,
+        refundStatus: (input.refundStatus as OrderRecord['refundStatus']) ?? piece.refundStatus,
+        remark: input.remark ?? piece.remark,
+        finishedAt: ['SUCCESS', 'REFUNDED', 'CLOSED', 'FAIL'].includes(input.mainStatus),
+      });
+    }
+
+    await this.repository.updateGroupStatuses(input.orderNo, {
+      mainStatus: input.mainStatus as OrderGroupRecord['mainStatus'],
+      supplierStatus:
+        (input.supplierStatus as OrderGroupRecord['supplierStatus']) ?? group.supplierStatus,
+      refundStatus: (input.refundStatus as OrderGroupRecord['refundStatus']) ?? group.refundStatus,
+      finishedAt: ['SUCCESS', 'REFUNDED', 'CLOSED', 'FAIL'].includes(input.mainStatus),
+    });
+
+    await this.repository.addEvent({
+      orderNo: input.orderNo,
+      parentOrderNo: input.orderNo,
+      eventType: 'OrderManualStatusUpdated',
+      sourceService: 'orders',
+      sourceNo: null,
+      beforeStatusJson: {
+        mainStatus: group.mainStatus,
+        supplierStatus: group.supplierStatus,
+        refundStatus: group.refundStatus,
+      },
+      afterStatusJson: {
+        mainStatus: input.mainStatus,
+        supplierStatus: input.supplierStatus ?? group.supplierStatus,
+        refundStatus: input.refundStatus ?? group.refundStatus,
+      },
+      payloadJson: {
+        remark: input.remark ?? null,
+      },
+      idempotencyKey: `manual-status:${input.orderNo}:${input.requestId}`,
+      operator: 'ADMIN',
+      requestId: input.requestId,
+    });
+  }
+
+  async listCustomers(channelId: string) {
+    const result = await this.repository.listOrderGroups({
+      pageNum: 1,
+      pageSize: 1000,
+      channelId,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+    const customers = new Map<
+      string,
+      {
+        mobile: string;
+        totalOrders: number;
+        totalSalePrice: number;
+        lastOrderAt: string;
+      }
+    >();
+
+    for (const item of result.items) {
+      const existing = customers.get(item.mobile);
+
+      if (existing) {
+        existing.totalOrders += 1;
+        existing.totalSalePrice += item.totalSalePrice;
+        if (new Date(item.createdAt).getTime() > new Date(existing.lastOrderAt).getTime()) {
+          existing.lastOrderAt = item.createdAt;
+        }
+        continue;
+      }
+
+      customers.set(item.mobile, {
+        mobile: item.mobile,
+        totalOrders: 1,
+        totalSalePrice: item.totalSalePrice,
+        lastOrderAt: item.createdAt,
+      });
+    }
+
+    return Array.from(customers.values()).map((item) => ({
+      mobile: item.mobile,
+      totalOrders: item.totalOrders,
+      totalSaleAmountFen: toAmountFen(item.totalSalePrice) ?? 0,
+      lastOrderAt: toIsoDateTime(item.lastOrderAt) ?? item.lastOrderAt,
+    }));
+  }
+
+  async getCustomerDetail(channelId: string, mobile: string) {
+    const orders = await this.listOpenOrders({
+      channelId,
+      pageNum: 1,
+      pageSize: 200,
+      mobile,
+    });
+
+    return {
+      mobile,
+      orders: orders.items,
+      totalOrders: orders.total,
+    };
+  }
+
+  private async writeArtifactFile(
+    prefix: string,
+    headers: string[],
+    rows: Array<Array<string | number | null>>,
+  ) {
+    const exportDir = join(process.cwd(), 'var', 'exports');
+    await mkdir(exportDir, { recursive: true });
+    const fileName = `${prefix}-${Date.now()}.xlsx`;
+    const filePath = join(exportDir, fileName);
+    const content = [headers.join('\t'), ...rows.map((row) => row.map((cell) => cell ?? '').join('\t'))].join('\n');
+    await Bun.write(filePath, content);
+
+    return {
+      fileName,
+      filePath,
+      downloadUrl: `/downloads/${fileName}`,
+    };
+  }
+
+  private async createBatchJob(
+    channelId: string,
+    jobType: string,
+    businessKey: string,
+    items: Array<Record<string, unknown>>,
+    handler: (item: Record<string, unknown>) => Promise<Record<string, unknown>>,
+  ) {
+    const job = (await this.workerContract.enqueue({
+      jobType,
+      businessKey,
+      payload: {
+        channelId,
+        itemCount: items.length,
+      },
+      maxAttempts: 1,
+    })) as { id: string };
+
+    const receiptRows: Array<Array<string | number | null>> = [];
+
+    for (const [index, item] of items.entries()) {
+      try {
+        const result = await handler(item);
+        await this.workerContract.upsertJobItem({
+          jobId: job.id,
+          itemNo: String(index + 1),
+          status: 'SUCCESS',
+          payloadJson: item,
+          resultJson: result,
+        });
+        receiptRows.push([index + 1, 'SUCCESS', JSON.stringify(result)]);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : '处理失败';
+        await this.workerContract.upsertJobItem({
+          jobId: job.id,
+          itemNo: String(index + 1),
+          status: 'FAIL',
+          payloadJson: item,
+          resultJson: {},
+          errorMessage: message,
+        });
+        receiptRows.push([index + 1, 'FAIL', message]);
+      }
+    }
+
+    const artifact = await this.writeArtifactFile(jobType.replaceAll('.', '-'), ['itemNo', 'status', 'result'], receiptRows);
+    await this.workerContract.createArtifact({
+      jobId: job.id,
+      artifactType: 'RESULT',
+      fileName: artifact.fileName,
+      filePath: artifact.filePath,
+      downloadUrl: artifact.downloadUrl,
+    });
+    await this.workerContract.completeJob(job.id);
+
+    return this.workerContract.getById(job.id);
+  }
+
+  async createBatchOrders(input: {
+    channelId: string;
+    orders: Array<Record<string, unknown>>;
+    requestId: string;
+    clientIp: string;
+  }) {
+    return this.createBatchJob(
+      input.channelId,
+      'order.batch.create',
+      `${input.channelId}:${input.requestId}:batch`,
+      input.orders,
+      async (item) => {
+        const created = await this.createOrder({
+          channelId: input.channelId,
+          channelOrderNo: String(item.channelOrderNo ?? ''),
+          mobile: String(item.mobile ?? ''),
+          faceValue: Number(item.faceValue ?? 0),
+          productType:
+            item.productType === 'FAST' || item.productType === 'MIXED'
+              ? item.productType
+              : undefined,
+          extJson:
+            typeof item.ext === 'object' && item.ext !== null
+              ? (item.ext as Record<string, unknown>)
+              : {},
+          requestId: input.requestId,
+          clientIp: input.clientIp,
+        });
+
+        return {
+          orderNo: created.orderNo,
+        };
+      },
+    );
+  }
+
+  async createBatchImportJob(input: {
+    channelId: string;
+    content: string;
+    requestId: string;
+    clientIp: string;
+  }) {
+    const lines = input.content
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const [, ...dataLines] = lines;
+    const items = dataLines.map((line) => {
+      const [channelOrderNo = '', mobile = '', faceValue = '', productType = ''] = line.split(',');
+
+      return {
+        channelOrderNo,
+        mobile,
+        faceValue: Number(faceValue),
+        productType,
+      };
+    });
+
+    return this.createBatchOrders({
+      channelId: input.channelId,
+      orders: items,
+      requestId: input.requestId,
+      clientIp: input.clientIp,
+    });
+  }
+
+  async exportOrders(channelId: string) {
+    const orders = await this.repository.listOrderGroups({
+      pageNum: 1,
+      pageSize: 1000,
+      channelId,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    return this.createBatchJob(
+      channelId,
+      'order.export.orders',
+      `${channelId}:orders-export:${Date.now()}`,
+      orders.items.map((item) => ({
+        orderNo: item.orderNo,
+        channelOrderNo: item.channelOrderNo,
+        mobile: item.mobile,
+        mainStatus: item.mainStatus,
+      })),
+      async (item) => item,
+    );
+  }
+
+  async exportCustomers(channelId: string) {
+    const customers = await this.listCustomers(channelId);
+
+    return this.createBatchJob(
+      channelId,
+      'order.export.customers',
+      `${channelId}:customers-export:${Date.now()}`,
+      customers.map((item) => item as Record<string, unknown>),
+      async (item) => item,
+    );
+  }
+
+  async exportLogs(channelId: string) {
+    const orders = await this.repository.listOrderGroups({
+      pageNum: 1,
+      pageSize: 1000,
+      channelId,
+      sortBy: 'createdAt',
+      sortOrder: 'desc',
+    });
+
+    return this.createBatchJob(
+      channelId,
+      'order.export.logs',
+      `${channelId}:logs-export:${Date.now()}`,
+      orders.items.map((item) => ({
+        orderNo: item.orderNo,
+        mainStatus: item.mainStatus,
+        supplierStatus: item.supplierStatus,
+        refundStatus: item.refundStatus,
+        createdAt: item.createdAt,
+      })),
+      async (item) => item,
+    );
+  }
+
+  async getJobById(jobId: string) {
+    return this.workerContract.getById(jobId);
+  }
+
+  async getJobItems(jobId: string) {
+    return this.workerContract.listJobItems(jobId);
+  }
+
+  async getJobArtifacts(jobId: string) {
+    return this.workerContract.listJobArtifacts(jobId);
+  }
+
+  getBatchTemplate() {
+    return {
+      fileName: 'batch-template.xlsx',
+      content: 'channelOrderNo,mobile,faceValue,productType\nexample-001,13800138000,100,MIXED\n',
+    };
+  }
+
+  private toSplitCandidateList(
+    products: Awaited<ReturnType<ChannelsService['listChannelProducts']>>,
+    carrierCode: string,
+    province: string,
+    productType: RechargeProductType,
+  ): SplitCandidate[] {
+    return products
+      .filter((item) => {
+        if (!item.authorized || item.salePrice === null) {
+          return false;
+        }
+
+        if (!item.routeSupplierId || !item.routeSupplierProductCode) {
+          return false;
+        }
+
+        if (item.routeCostPrice === null || item.routeCostPrice === undefined) {
+          return false;
+        }
+
+        if (item.status !== 'ACTIVE') {
+          return false;
+        }
+
+        if (item.carrierCode !== carrierCode) {
+          return false;
+        }
+
+        if (item.productType && item.productType !== productType) {
+          return false;
+        }
+
+        return item.province === province || item.province === '全国';
+      })
+      .map((item) => ({
+        productId: item.productId,
+        productCode: item.productCode ?? null,
+        productName: item.productName,
+        carrierCode: item.carrierCode,
+        province: item.province,
+        faceValue: item.faceValue,
+        productType: item.productType ?? productType,
+        salePrice: Number(item.salePrice),
+        routeSupplierId: item.routeSupplierId as string,
+        routeSupplierName: item.routeSupplierName ?? null,
+        routeSupplierProductCode: item.routeSupplierProductCode as string,
+        routeCostPrice: Number(item.routeCostPrice),
+        latestSnapshotAt: item.latestSnapshotAt,
+        status: item.status,
+      }));
+  }
+
+  private pickPreferredCandidate(
+    candidates: SplitCandidate[],
+    province: string,
+  ): SplitCandidate | null {
+    const sorted = [...candidates].sort((left, right) => {
+      const provinceScoreLeft = left.province === province ? 0 : 1;
+      const provinceScoreRight = right.province === province ? 0 : 1;
+
+      if (provinceScoreLeft !== provinceScoreRight) {
+        return provinceScoreLeft - provinceScoreRight;
+      }
+
+      if (left.salePrice !== right.salePrice) {
+        return left.salePrice - right.salePrice;
+      }
+
+      if (left.routeCostPrice !== right.routeCostPrice) {
+        return left.routeCostPrice - right.routeCostPrice;
+      }
+
+      return left.productId.localeCompare(right.productId);
+    });
+
+    return sorted[0] ?? null;
+  }
+
+  private findSplitCombination(
+    totalFaceValue: number,
+    candidateByFaceValue: Map<number, SplitCandidate>,
+    maxPieces: number,
+    preferMaxSingleFaceValue: boolean,
+  ): SplitCandidate[] | null {
+    const faceValues = Array.from(candidateByFaceValue.keys()).sort((left, right) =>
+      preferMaxSingleFaceValue ? right - left : left - right,
+    );
+    const path: SplitCandidate[] = [];
+
+    const dfs = (remaining: number): boolean => {
+      if (remaining === 0) {
+        return true;
+      }
+
+      if (path.length >= maxPieces) {
+        return false;
+      }
+
+      for (const faceValue of faceValues) {
+        if (faceValue > remaining) {
+          continue;
+        }
+
+        const candidate = candidateByFaceValue.get(faceValue);
+
+        if (!candidate) {
+          continue;
+        }
+
+        path.push(candidate);
+
+        if (dfs(remaining - faceValue)) {
+          return true;
+        }
+
+        path.pop();
+      }
+
+      return false;
+    };
+
+    return dfs(totalFaceValue) ? [...path] : null;
+  }
+
+  private async resolveSplitPlan(input: {
+    channelId: string;
+    mobile: string;
+    faceValue: number;
+    productType: RechargeProductType;
+  }) {
+    const mobileContext = await lookupMobileSegment(input.mobile);
+    const splitPolicy = await this.channelsService.getSplitPolicy(input.channelId);
+    const carrierCode = splitPolicy.carrierOverride ?? mobileContext.ispName;
+    const province = splitPolicy.provinceOverride ?? mobileContext.province;
+    const channelProducts = await this.channelsService.listChannelProducts(input.channelId, {
+      carrierCode,
+      productType: input.productType,
+      status: 'ACTIVE',
+    });
+    const candidates = this.toSplitCandidateList(
+      channelProducts,
+      carrierCode,
+      province,
+      input.productType,
+    );
+
+    if (candidates.length === 0) {
+      throw notFound('未匹配到渠道已授权且可售的充值商品');
+    }
+
+    const exact = this.pickPreferredCandidate(
+      candidates.filter((item) => item.faceValue === input.faceValue),
+      province,
+    );
+
+    if (exact) {
+      return {
+        mobileContext: {
+          mobile: mobileContext.mobile,
+          province,
+          ispName: carrierCode,
+        },
+        pieces: [exact],
+        usedSplit: false,
+        splitPolicy,
+      };
+    }
+
+    if (!splitPolicy.enabled) {
+      throw badRequest('渠道拆单未开启，且未匹配到精确面值商品');
+    }
+
+    if (splitPolicy.maxSplitPieces <= 1) {
+      throw badRequest('渠道拆单片数上限不足，无法完成拆单');
+    }
+
+    const allowedFaceValues = splitPolicy.allowedFaceValues.filter((value) => value > 0);
+
+    if (allowedFaceValues.length === 0) {
+      throw badRequest('渠道拆单面值配置为空');
+    }
+
+    const supplierBuckets = new Map<string, SplitCandidate[]>();
+
+    for (const candidate of candidates) {
+      if (!allowedFaceValues.includes(candidate.faceValue)) {
+        continue;
+      }
+
+      const bucket = supplierBuckets.get(candidate.routeSupplierId) ?? [];
+      bucket.push(candidate);
+      supplierBuckets.set(candidate.routeSupplierId, bucket);
+    }
+
+    for (const [supplierId, bucket] of supplierBuckets.entries()) {
+      const candidateByFaceValue = new Map<number, SplitCandidate>();
+
+      for (const faceValue of allowedFaceValues) {
+        const picked = this.pickPreferredCandidate(
+          bucket.filter((item) => item.faceValue === faceValue),
+          province,
+        );
+
+        if (picked) {
+          candidateByFaceValue.set(faceValue, picked);
+        }
+      }
+
+      if (candidateByFaceValue.size === 0) {
+        continue;
+      }
+
+      const pieces = this.findSplitCombination(
+        input.faceValue,
+        candidateByFaceValue,
+        splitPolicy.maxSplitPieces,
+        splitPolicy.preferMaxSingleFaceValue,
+      );
+
+      if (pieces) {
+        return {
+          mobileContext: {
+            mobile: mobileContext.mobile,
+            province,
+            ispName: carrierCode,
+          },
+          pieces,
+          usedSplit: pieces.length > 1,
+          supplierId,
+          splitPolicy,
+        };
+      }
+    }
+
+    throw badRequest('当前渠道与单一供应商下不存在可精确凑额的拆单组合');
   }
 
   async createOrder(input: {
@@ -290,7 +1142,7 @@ export class OrdersService implements OrderContract {
     clientIp: string;
   }) {
     return this.repository.withCreateOrderLock(input.channelId, input.channelOrderNo, async () => {
-      const existing = await this.repository.findByChannelOrder(
+      const existing = await this.repository.findGroupByChannelOrder(
         input.channelId,
         input.channelOrderNo,
       );
@@ -298,39 +1150,45 @@ export class OrdersService implements OrderContract {
       if (existing) {
         return existing;
       }
-
-      const matched = await this.productContract.matchRechargeProduct({
+      const requestedProductType = input.productType ?? 'MIXED';
+      const routingPlan = await this.resolveSplitPlan({
+        channelId: input.channelId,
         mobile: input.mobile,
         faceValue: input.faceValue,
-        productType: input.productType,
+        productType: requestedProductType,
       });
-      const policy = await this.channelContract.getOrderPolicy({
-        channelId: input.channelId,
-        productId: matched.product.id,
-        orderAmount: matched.product.faceValue,
-      });
+      const primaryPiece = routingPlan.pieces[0];
 
-      if (!policy.pricePolicy) {
-        throw badRequest('渠道未配置销售价格');
+      if (!primaryPiece) {
+        throw badRequest('未生成有效的履约拆单结果');
       }
 
-      const salePrice = Number(policy.pricePolicy.salePrice);
-      const purchasePrice = Number(matched.supplierCandidates[0]?.costPrice ?? 0);
+      const policy = await this.channelContract.getOrderPolicy({
+        channelId: input.channelId,
+        productId: primaryPiece.productId,
+        orderAmount: input.faceValue,
+      });
 
-      if (salePrice < purchasePrice) {
-        throw badRequest('渠道销售价不得低于采购价');
+      const totalSalePrice = routingPlan.pieces.reduce((sum, piece) => sum + piece.salePrice, 0);
+      const totalPurchasePrice = routingPlan.pieces.reduce(
+        (sum, piece) => sum + piece.routeCostPrice,
+        0,
+      );
+
+      if (totalSalePrice < totalPurchasePrice) {
+        throw badRequest('渠道销售总价不得低于采购总价');
       }
 
       await this.ledgerContract.ensureBalanceSufficient({
         channelId: input.channelId,
-        amount: salePrice,
+        amount: totalSalePrice,
       });
 
       const riskDecision = await this.riskContract.preCheck({
         channelId: input.channelId,
-        amount: salePrice,
+        amount: totalSalePrice,
         ip: input.clientIp,
-        mobile: matched.mobileContext.mobile,
+        mobile: routingPlan.mobileContext.mobile,
       });
 
       if (riskDecision.decision !== 'PASS') {
@@ -338,25 +1196,67 @@ export class OrdersService implements OrderContract {
       }
 
       const now = Date.now();
-      const isFast = matched.product.productType === 'FAST';
+      const isFast = requestedProductType === 'FAST';
       const warningDeadlineAt = new Date(now + (isFast ? 10 : 150) * 60 * 1000);
       const expireDeadlineAt = new Date(now + (isFast ? 60 : 180) * 60 * 1000);
 
-      let order: OrderRecord;
+      const group = await this.repository.createOrderGroup({
+        channelOrderNo: input.channelOrderNo,
+        channelId: input.channelId,
+        mobile: routingPlan.mobileContext.mobile,
+        carrierCode: routingPlan.mobileContext.ispName,
+        province: routingPlan.mobileContext.province,
+        faceValueTotal: input.faceValue,
+        requestedProductType,
+        totalSalePrice,
+        totalPurchasePrice,
+        mainStatus: 'CREATED',
+        supplierStatus: 'WAIT_SUBMIT',
+        notifyStatus: 'PENDING',
+        refundStatus: 'NONE',
+        monitorStatus: 'NORMAL',
+        callbackUrl: policy.callbackConfig.callbackUrl,
+        splitResultJson: {
+          usedSplit: routingPlan.usedSplit,
+          pieceCount: routingPlan.pieces.length,
+          pieces: routingPlan.pieces.map((piece) => ({
+            productId: piece.productId,
+            productCode: piece.productCode,
+            productName: piece.productName,
+            faceValue: piece.faceValue,
+            salePrice: piece.salePrice,
+            purchasePrice: piece.routeCostPrice,
+            supplierId: piece.routeSupplierId,
+            supplierName: piece.routeSupplierName,
+          })),
+        },
+        extJson: input.extJson ?? {},
+        requestId: input.requestId,
+      });
 
-      try {
-        order = await this.repository.createOrder({
+      const pieceCount = routingPlan.pieces.length;
+
+      const children: OrderRecord[] = [];
+
+      for (const [index, piece] of routingPlan.pieces.entries()) {
+        const child = await this.repository.createOrder({
+          orderNo: index === 0 ? group.orderNo : undefined,
+          orderGroupId: group.id,
+          parentOrderNo: group.orderNo,
           channelOrderNo: input.channelOrderNo,
           channelId: input.channelId,
           parentChannelId: null,
-          mobile: matched.mobileContext.mobile,
-          province: matched.mobileContext.province,
-          ispName: matched.mobileContext.ispName,
-          faceValue: input.faceValue,
-          requestedProductType: input.productType ?? 'MIXED',
-          matchedProductId: matched.product.id,
-          salePrice,
-          purchasePrice,
+          supplierId: piece.routeSupplierId,
+          mobile: routingPlan.mobileContext.mobile,
+          province: routingPlan.mobileContext.province,
+          ispName: routingPlan.mobileContext.ispName,
+          faceValue: piece.faceValue,
+          requestedProductType,
+          matchedProductId: piece.productId,
+          salePrice: piece.salePrice,
+          purchasePrice: piece.routeCostPrice,
+          pieceNo: index + 1,
+          pieceCount,
           mainStatus: 'CREATED',
           supplierStatus: 'WAIT_SUBMIT',
           notifyStatus: 'PENDING',
@@ -366,55 +1266,61 @@ export class OrdersService implements OrderContract {
           expireDeadlineAt,
           channelSnapshotJson: {
             channel: policy.channel,
-            pricePolicy: policy.pricePolicy,
+            splitPolicy: routingPlan.splitPolicy,
           },
           productSnapshotJson: {
-            product: matched.product,
+            product: piece,
           },
           callbackSnapshotJson: {
             callbackConfig: policy.callbackConfig,
           },
           supplierRouteSnapshotJson: {
-            supplierCandidates: matched.supplierCandidates,
+            supplierCandidates: [
+              {
+                supplierId: piece.routeSupplierId,
+                supplierProductCode: piece.routeSupplierProductCode,
+                costPrice: piece.routeCostPrice,
+                routeType: 'PRIMARY',
+                priority: 1,
+                salesStatus: 'ON_SALE',
+                inventoryQuantity: 1,
+                dynamicUpdatedAt: piece.latestSnapshotAt ?? new Date().toISOString(),
+                status: piece.status,
+              },
+            ],
           },
           riskSnapshotJson: {
             ...riskDecision,
           },
-          extJson: input.extJson ?? {},
+          extJson: {
+            ...(input.extJson ?? {}),
+            parentOrderNo: group.orderNo,
+          },
           requestId: input.requestId,
         });
-      } catch (error) {
-        if (isUniqueConstraintViolation(error)) {
-          const conflictedOrder = await this.repository.findByChannelOrder(
-            input.channelId,
-            input.channelOrderNo,
-          );
 
-          if (conflictedOrder) {
-            return conflictedOrder;
-          }
-        }
-
-        throw error;
+        children.push(child);
       }
 
       await this.repository.addEvent({
-        orderNo: order.orderNo,
+        orderNo: group.orderNo,
+        parentOrderNo: group.orderNo,
         eventType: 'OrderCreated',
         sourceService: 'orders',
         sourceNo: null,
         beforeStatusJson: {},
         afterStatusJson: {
-          mainStatus: order.mainStatus,
-          supplierStatus: order.supplierStatus,
-          notifyStatus: order.notifyStatus,
-          refundStatus: order.refundStatus,
+          mainStatus: group.mainStatus,
+          supplierStatus: group.supplierStatus,
+          notifyStatus: group.notifyStatus,
+          refundStatus: group.refundStatus,
         },
         payloadJson: {
-          mobile: order.mobile,
-          faceValue: order.faceValue,
-          requestedProductType: order.requestedProductType,
-          matchedProductId: order.matchedProductId,
+          mobile: group.mobile,
+          faceValue: group.faceValueTotal,
+          requestedProductType: group.requestedProductType,
+          usedSplit: routingPlan.usedSplit,
+          pieceOrders: children.map((child) => child.orderNo),
           riskDecision,
         },
         idempotencyKey: `${input.channelId}:${input.channelOrderNo}`,
@@ -422,39 +1328,28 @@ export class OrdersService implements OrderContract {
         requestId: input.requestId,
       });
 
-      try {
-        await this.ledgerContract.debitOrderAmount({
-          channelId: order.channelId,
-          orderNo: order.orderNo,
-          amount: order.salePrice,
-        });
-      } catch (error) {
-        await this.repository.deleteOrder(order.orderNo);
-        throw error;
-      }
+      await this.ledgerContract.debitOrderAmount({
+        channelId: group.channelId,
+        orderNo: group.orderNo,
+        amount: group.totalSalePrice,
+      });
 
-      try {
+      for (const child of children) {
         await this.workerContract.enqueue({
           jobType: 'supplier.submit',
-          businessKey: order.orderNo,
+          businessKey: child.orderNo,
           payload: {
-            orderNo: order.orderNo,
+            orderNo: child.orderNo,
           },
         });
-      } catch (error) {
-        await this.compensateInitialSubmitEnqueueFailure(
-          order,
-          error instanceof Error ? error.message : 'supplier.submit enqueue failed',
-        );
-        throw error;
       }
 
-      return this.getOrderByNo(order.orderNo);
+      return this.getOrderGroupByNo(group.orderNo);
     });
   }
 
   private async compensateInitialSubmitEnqueueFailure(order: OrderRecord, reason: string) {
-    const currentOrder = await this.getOrderByNo(order.orderNo);
+    const currentOrder = await this.getSupplierExecutionContext(order.orderNo);
 
     if (currentOrder.mainStatus === 'REFUNDED') {
       return;
@@ -509,8 +1404,118 @@ export class OrdersService implements OrderContract {
     );
   }
 
+  private deriveAggregatedGroupStatuses(
+    pieces: OrderPieceRecord[],
+    current: OrderGroupRecord,
+  ): {
+    mainStatus: OrderGroupRecord['mainStatus'];
+    supplierStatus: OrderGroupRecord['supplierStatus'];
+    refundStatus: OrderGroupRecord['refundStatus'];
+    monitorStatus: OrderGroupRecord['monitorStatus'];
+    finishedAt: boolean;
+  } {
+    if (pieces.length === 0) {
+      return {
+        mainStatus: current.mainStatus,
+        supplierStatus: current.supplierStatus,
+        refundStatus: current.refundStatus,
+        monitorStatus: current.monitorStatus,
+        finishedAt: Boolean(current.finishedAt),
+      };
+    }
+
+    const hasTimeoutWarning = pieces.some((piece) => piece.monitorStatus === 'TIMEOUT_WARNING');
+    const hasLateCallback = pieces.some(
+      (piece) => piece.monitorStatus === 'LATE_CALLBACK_EXCEPTION',
+    );
+    const monitorStatus = hasLateCallback
+      ? 'LATE_CALLBACK_EXCEPTION'
+      : hasTimeoutWarning
+        ? 'TIMEOUT_WARNING'
+        : 'NORMAL';
+
+    if (pieces.every((piece) => piece.mainStatus === 'SUCCESS')) {
+      return {
+        mainStatus: 'SUCCESS',
+        supplierStatus: 'SUCCESS',
+        refundStatus: 'NONE',
+        monitorStatus,
+        finishedAt: true,
+      };
+    }
+
+    if (pieces.every((piece) => piece.mainStatus === 'REFUNDED')) {
+      return {
+        mainStatus: 'REFUNDED',
+        supplierStatus: 'FAIL',
+        refundStatus: 'SUCCESS',
+        monitorStatus,
+        finishedAt: true,
+      };
+    }
+
+    if (
+      pieces.some((piece) => piece.refundStatus === 'PENDING' || piece.mainStatus === 'REFUNDING') ||
+      pieces.some((piece) => piece.supplierStatus === 'FAIL' || piece.mainStatus === 'FAIL')
+    ) {
+      return {
+        mainStatus: 'REFUNDING',
+        supplierStatus: 'FAIL',
+        refundStatus: 'PENDING',
+        monitorStatus,
+        finishedAt: false,
+      };
+    }
+
+    if (pieces.some((piece) => ['PROCESSING'].includes(piece.mainStatus))) {
+      return {
+        mainStatus: 'PROCESSING',
+        supplierStatus: pieces.some((piece) => piece.supplierStatus === 'QUERYING')
+          ? 'QUERYING'
+          : 'ACCEPTED',
+        refundStatus: 'NONE',
+        monitorStatus,
+        finishedAt: false,
+      };
+    }
+
+    if (pieces.some((piece) => ['ACCEPTED', 'QUERYING'].includes(piece.supplierStatus))) {
+      return {
+        mainStatus: 'PROCESSING',
+        supplierStatus: pieces.some((piece) => piece.supplierStatus === 'QUERYING')
+          ? 'QUERYING'
+          : 'ACCEPTED',
+        refundStatus: 'NONE',
+        monitorStatus,
+        finishedAt: false,
+      };
+    }
+
+    return {
+      mainStatus: 'CREATED',
+      supplierStatus: 'WAIT_SUBMIT',
+      refundStatus: 'NONE',
+      monitorStatus,
+      finishedAt: false,
+    };
+  }
+
+  private async syncOrderGroupState(parentOrderNo: string) {
+    const group = await this.getOrderGroupByNo(parentOrderNo);
+    const pieces = await this.repository.listPieceOrders(parentOrderNo);
+    const next = this.deriveAggregatedGroupStatuses(pieces, group);
+
+    await this.repository.updateGroupStatuses(parentOrderNo, next);
+
+    return {
+      previous: group,
+      current: await this.getOrderGroupByNo(parentOrderNo),
+      pieces,
+    };
+  }
+
   async retryNotification(orderNo: string) {
-    await this.getOrderByNo(orderNo);
+    await this.getOrderGroupByNo(orderNo);
 
     const latestTask = await this.notificationsRepository.findLatestTaskByOrderNo(orderNo);
 
@@ -593,22 +1598,32 @@ export class OrdersService implements OrderContract {
       throw badRequest('退款补偿任务缺少订单号');
     }
 
-    await this.refundPendingOrder(await this.getOrderByNo(orderNo), {
+    await this.refundPendingOrder(await this.getNotificationContext(orderNo), {
       throwOnFailure: true,
     });
   }
 
   async closeOrder(orderNo: string, requestId: string) {
-    const order = await this.getOrderByNo(orderNo);
+    const order = await this.getOrderGroupByNo(orderNo);
+    const pieces = await this.repository.listPieceOrders(orderNo);
 
     if (!['SUCCESS', 'REFUNDED', 'CLOSED'].includes(order.mainStatus)) {
-      await this.repository.updateStatuses(orderNo, {
+      for (const piece of pieces) {
+        await this.repository.updateStatuses(piece.orderNo, {
+          mainStatus: 'REFUNDING',
+          supplierStatus: 'FAIL',
+          refundStatus: 'PENDING',
+        });
+      }
+
+      await this.repository.updateGroupStatuses(orderNo, {
         mainStatus: 'REFUNDING',
         supplierStatus: 'FAIL',
         refundStatus: 'PENDING',
       });
       await this.repository.addEvent({
         orderNo,
+        parentOrderNo: orderNo,
         eventType: 'OrderClosed',
         sourceService: 'orders',
         beforeStatusJson: {
@@ -629,18 +1644,19 @@ export class OrdersService implements OrderContract {
         requestId,
       });
 
-      await this.refundPendingOrder(await this.getOrderByNo(orderNo), {
+      await this.refundPendingOrder(await this.getNotificationContext(orderNo), {
         throwOnFailure: false,
       });
       return;
     }
 
-    await this.repository.updateStatuses(orderNo, {
+    await this.repository.updateGroupStatuses(orderNo, {
       mainStatus: 'CLOSED',
       finishedAt: true,
     });
     await this.repository.addEvent({
       orderNo,
+      parentOrderNo: orderNo,
       eventType: 'OrderClosed',
       sourceService: 'orders',
       beforeStatusJson: {
@@ -657,16 +1673,21 @@ export class OrdersService implements OrderContract {
   }
 
   async markException(orderNo: string, exceptionTag: string, requestId: string) {
-    const order = await this.getOrderByNo(orderNo);
-    await this.repository.updateStatuses(orderNo, {
-      exceptionTag,
-    });
+    const pieces = await this.repository.listPieceOrders(orderNo);
+
+    for (const piece of pieces) {
+      await this.repository.updateStatuses(piece.orderNo, {
+        exceptionTag,
+      });
+    }
+
     await this.repository.addEvent({
       orderNo,
+      parentOrderNo: orderNo,
       eventType: 'OrderMarkedException',
       sourceService: 'orders',
       beforeStatusJson: {
-        exceptionTag: order.exceptionTag,
+        exceptionTag: null,
       },
       afterStatusJson: {
         exceptionTag,
@@ -681,15 +1702,21 @@ export class OrdersService implements OrderContract {
   }
 
   async addRemark(orderNo: string, remark: string, operatorUserId: string | null) {
-    await this.repository.addRemark(orderNo, remark, operatorUserId);
+    const pieces = await this.repository.listPieceOrders(orderNo);
+
+    for (const piece of pieces) {
+      await this.repository.addRemark(piece.orderNo, remark, operatorUserId);
+    }
   }
 
   async scanTimeouts(now = new Date()) {
     const warningTransitions = await this.repository.transitionTimeoutWarnings(now);
 
     for (const order of warningTransitions) {
+      const childOrder = await this.getSupplierExecutionContext(order.orderNo);
       await this.repository.addEvent({
         orderNo: order.orderNo,
+        parentOrderNo: childOrder.parentOrderNo ?? childOrder.orderNo,
         eventType: 'OrderTimeoutWarning',
         sourceService: 'orders',
         sourceNo: null,
@@ -707,14 +1734,19 @@ export class OrdersService implements OrderContract {
         operator: 'SYSTEM',
         requestId: order.requestId,
       });
+
+      await this.syncOrderGroupState(childOrder.parentOrderNo ?? childOrder.orderNo);
     }
 
     const expiryTransitions = await this.repository.transitionTimeoutExpiry(now);
 
     for (const order of expiryTransitions) {
+      const childOrder = await this.getSupplierExecutionContext(order.orderNo);
+      const parentOrderNo = childOrder.parentOrderNo ?? childOrder.orderNo;
       if (!(order.previousMainStatus === 'REFUNDING' && order.previousRefundStatus === 'PENDING')) {
         await this.repository.addEvent({
           orderNo: order.orderNo,
+          parentOrderNo,
           eventType: 'OrderTimedOut',
           sourceService: 'orders',
           sourceNo: null,
@@ -740,11 +1772,12 @@ export class OrdersService implements OrderContract {
         });
       }
 
-      const currentOrder = await this.getOrderByNo(order.orderNo);
+      await this.syncOrderGroupState(parentOrderNo);
+      const currentOrder = await this.getNotificationContext(parentOrderNo);
 
       if (currentOrder.mainStatus === 'REFUNDED') {
         await this.handleRefundSucceeded({
-          orderNo: currentOrder.orderNo,
+          orderNo: parentOrderNo,
           sourceService: 'orders',
           sourceNo: null,
         });
@@ -765,7 +1798,7 @@ export class OrdersService implements OrderContract {
 
     for (const order of notificationRecoveryOrders) {
       await this.handleRefundSucceeded({
-        orderNo: order.orderNo,
+        orderNo: order.parentOrderNo ?? order.orderNo,
         sourceService: 'orders',
         sourceNo: null,
       });
@@ -778,7 +1811,8 @@ export class OrdersService implements OrderContract {
     supplierOrderNo: string;
     status: 'ACCEPTED' | 'PROCESSING';
   }) {
-    const order = await this.getOrderByNo(payload.orderNo);
+    const order = await this.getSupplierExecutionContext(payload.orderNo);
+    const parentOrderNo = order.parentOrderNo ?? order.orderNo;
 
     if (
       ['SUCCESS', 'REFUNDED', 'REFUNDING', 'CLOSED'].includes(order.mainStatus) ||
@@ -793,6 +1827,7 @@ export class OrdersService implements OrderContract {
     });
     await this.repository.addEvent({
       orderNo: order.orderNo,
+      parentOrderNo,
       eventType: 'SupplierAccepted',
       sourceService: 'suppliers',
       sourceNo: payload.supplierOrderNo,
@@ -809,6 +1844,8 @@ export class OrdersService implements OrderContract {
       operator: 'SYSTEM',
       requestId: order.requestId,
     });
+
+    await this.syncOrderGroupState(parentOrderNo);
   }
 
   async handleSupplierSucceeded(payload: {
@@ -817,7 +1854,8 @@ export class OrdersService implements OrderContract {
     supplierOrderNo: string;
     costPrice: number;
   }) {
-    const order = await this.getOrderByNo(payload.orderNo);
+    const order = await this.getSupplierExecutionContext(payload.orderNo);
+    const parentOrderNo = order.parentOrderNo ?? order.orderNo;
 
     if (order.mainStatus === 'REFUNDED' && order.refundStatus === 'SUCCESS') {
       await this.repository.updateStatuses(order.orderNo, {
@@ -826,6 +1864,7 @@ export class OrdersService implements OrderContract {
       });
       await this.repository.addEvent({
         orderNo: order.orderNo,
+        parentOrderNo,
         eventType: 'SupplierLateSuccessAfterRefund',
         sourceService: 'suppliers',
         sourceNo: payload.supplierOrderNo,
@@ -844,6 +1883,7 @@ export class OrdersService implements OrderContract {
         operator: 'SYSTEM',
         requestId: order.requestId,
       });
+      await this.syncOrderGroupState(parentOrderNo);
       return;
     }
 
@@ -862,6 +1902,7 @@ export class OrdersService implements OrderContract {
 
     await this.repository.addEvent({
       orderNo: order.orderNo,
+      parentOrderNo,
       eventType: 'SupplierSucceeded',
       sourceService: 'suppliers',
       sourceNo: payload.supplierOrderNo,
@@ -879,17 +1920,24 @@ export class OrdersService implements OrderContract {
       requestId: order.requestId,
     });
 
-    await this.ledgerContract.confirmOrderProfit({
-      orderNo: order.orderNo,
-      salePrice: order.salePrice,
-      purchasePrice: payload.costPrice || order.purchasePrice,
-    });
-    await eventBus.publish('NotificationRequested', {
-      orderNo: order.orderNo,
-      channelId: order.channelId,
-      notifyType: 'WEBHOOK',
-      triggerReason: 'ORDER_SUCCESS',
-    });
+    const aggregation = await this.syncOrderGroupState(parentOrderNo);
+
+    if (
+      aggregation.previous.mainStatus !== 'SUCCESS' &&
+      aggregation.current.mainStatus === 'SUCCESS'
+    ) {
+      await this.ledgerContract.confirmOrderProfit({
+        orderNo: aggregation.current.orderNo,
+        salePrice: aggregation.current.totalSalePrice,
+        purchasePrice: aggregation.current.totalPurchasePrice,
+      });
+      await eventBus.publish('NotificationRequested', {
+        orderNo: aggregation.current.orderNo,
+        channelId: aggregation.current.channelId,
+        notifyType: 'WEBHOOK',
+        triggerReason: 'ORDER_SUCCESS',
+      });
+    }
   }
 
   async handleSupplierFailed(payload: {
@@ -898,19 +1946,21 @@ export class OrdersService implements OrderContract {
     supplierOrderNo: string;
     reason: string;
   }) {
-    const order = await this.getOrderByNo(payload.orderNo);
+    const order = await this.getSupplierExecutionContext(payload.orderNo);
+    const parentOrderNo = order.parentOrderNo ?? order.orderNo;
 
     if (['SUCCESS', 'REFUNDED'].includes(order.mainStatus)) {
       return;
     }
 
     await this.repository.updateStatuses(order.orderNo, {
-      mainStatus: 'REFUNDING',
+      mainStatus: 'FAIL',
       supplierStatus: 'FAIL',
-      refundStatus: 'PENDING',
+      refundStatus: 'NONE',
     });
     await this.repository.addEvent({
       orderNo: order.orderNo,
+      parentOrderNo,
       eventType: 'SupplierFailed',
       sourceService: 'suppliers',
       sourceNo: payload.supplierOrderNo,
@@ -920,9 +1970,9 @@ export class OrdersService implements OrderContract {
         refundStatus: order.refundStatus,
       },
       afterStatusJson: {
-        mainStatus: 'REFUNDING',
+        mainStatus: 'FAIL',
         supplierStatus: 'FAIL',
-        refundStatus: 'PENDING',
+        refundStatus: 'NONE',
       },
       payloadJson: payload,
       idempotencyKey: `${payload.supplierOrderNo}:FAIL`,
@@ -930,7 +1980,31 @@ export class OrdersService implements OrderContract {
       requestId: order.requestId,
     });
 
-    await this.refundPendingOrder(await this.getOrderByNo(order.orderNo), {
+    const aggregation = await this.syncOrderGroupState(parentOrderNo);
+
+    await this.repository.addEvent({
+      orderNo: parentOrderNo,
+      parentOrderNo,
+      eventType: 'OrderRefunding',
+      sourceService: 'orders',
+      sourceNo: payload.supplierOrderNo,
+      beforeStatusJson: {
+        mainStatus: aggregation.previous.mainStatus,
+        supplierStatus: aggregation.previous.supplierStatus,
+        refundStatus: aggregation.previous.refundStatus,
+      },
+      afterStatusJson: {
+        mainStatus: aggregation.current.mainStatus,
+        supplierStatus: aggregation.current.supplierStatus,
+        refundStatus: aggregation.current.refundStatus,
+      },
+      payloadJson: payload,
+      idempotencyKey: `refunding:${payload.supplierOrderNo}`,
+      operator: 'SYSTEM',
+      requestId: order.requestId,
+    });
+
+    await this.refundPendingOrder(await this.getNotificationContext(parentOrderNo), {
       throwOnFailure: false,
     });
   }
@@ -940,7 +2014,8 @@ export class OrdersService implements OrderContract {
     sourceService: string;
     sourceNo?: string | null;
   }) {
-    const order = await this.getOrderByNo(payload.orderNo);
+    const order = await this.getNotificationContext(payload.orderNo);
+    const pieces = await this.repository.listPieceOrders(order.orderNo);
 
     if (order.mainStatus === 'REFUNDED') {
       if (['PENDING', 'RETRYING'].includes(order.notifyStatus)) {
@@ -958,7 +2033,15 @@ export class OrdersService implements OrderContract {
       return;
     }
 
-    await this.repository.updateStatuses(order.orderNo, {
+    for (const piece of pieces) {
+      await this.repository.updateStatuses(piece.orderNo, {
+        mainStatus: 'REFUNDED',
+        refundStatus: 'SUCCESS',
+        finishedAt: true,
+      });
+    }
+
+    await this.repository.updateGroupStatuses(order.orderNo, {
       mainStatus: 'REFUNDED',
       refundStatus: 'SUCCESS',
       finishedAt: true,
@@ -966,6 +2049,7 @@ export class OrdersService implements OrderContract {
 
     await this.repository.addEvent({
       orderNo: order.orderNo,
+      parentOrderNo: order.orderNo,
       eventType: 'RefundSucceeded',
       sourceService: payload.sourceService,
       sourceNo: payload.sourceNo ?? null,
@@ -992,12 +2076,13 @@ export class OrdersService implements OrderContract {
   }
 
   async handleNotificationSucceeded(payload: { orderNo: string; taskNo: string }) {
-    const order = await this.getOrderByNo(payload.orderNo);
-    await this.repository.updateStatuses(order.orderNo, {
+    const order = await this.getOrderGroupByNo(payload.orderNo);
+    await this.repository.updateGroupStatuses(order.orderNo, {
       notifyStatus: 'SUCCESS',
     });
     await this.repository.addEvent({
       orderNo: order.orderNo,
+      parentOrderNo: order.orderNo,
       eventType: 'NotificationSucceeded',
       sourceService: 'notifications',
       sourceNo: payload.taskNo,
@@ -1015,12 +2100,13 @@ export class OrdersService implements OrderContract {
   }
 
   async handleNotificationFailed(payload: { orderNo: string; taskNo: string; reason: string }) {
-    const order = await this.getOrderByNo(payload.orderNo);
-    await this.repository.updateStatuses(order.orderNo, {
+    const order = await this.getOrderGroupByNo(payload.orderNo);
+    await this.repository.updateGroupStatuses(order.orderNo, {
       notifyStatus: 'DEAD_LETTER',
     });
     await this.repository.addEvent({
       orderNo: order.orderNo,
+      parentOrderNo: order.orderNo,
       eventType: 'NotificationFailed',
       sourceService: 'notifications',
       sourceNo: payload.taskNo,

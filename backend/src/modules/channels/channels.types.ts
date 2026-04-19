@@ -3,8 +3,20 @@ export interface Channel {
   channelCode: string;
   channelName: string;
   channelType: string;
-  status: string;
+  contactName: string | null;
+  contactPhone: string | null;
+  contactEmail: string | null;
+  baseUrl: string | null;
+  protocolType: string;
+  accessAccount: string | null;
+  accessPasswordHash: string | null;
+  failedLoginAttempts: number;
+  lockedUntil: string | null;
+  cooperationStatus: string;
+  supportsConsumptionLog: boolean;
   settlementMode: string;
+  status: string;
+  remark: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -53,9 +65,75 @@ export interface ChannelLimitRule {
   qpsLimit: number;
 }
 
+export interface ChannelSplitPolicy {
+  id: string;
+  channelId: string;
+  enabled: boolean;
+  allowedFaceValues: number[];
+  preferMaxSingleFaceValue: boolean;
+  maxSplitPieces: number;
+  provinceOverride: string | null;
+  carrierOverride: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChannelPortalSession {
+  id: string;
+  channelId: string;
+  accessTokenHash: string;
+  status: string;
+  expiresAt: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ChannelRechargeRecord {
+  recordId: string;
+  channelId: string;
+  amount: number;
+  beforeBalance: number;
+  afterBalance: number;
+  currency: string;
+  recordSource: string;
+  remark: string | null;
+  operatorUserId: string | null;
+  operatorUsername: string | null;
+  createdAt: string;
+}
+
+export interface ChannelProductRecord {
+  channelId: string;
+  productId: string;
+  productCode?: string | null;
+  productName: string;
+  carrierCode: string;
+  province: string;
+  faceValue: number;
+  productType?: string | null;
+  salePrice: number | null;
+  authorized: boolean;
+  routeSupplierId: string | null;
+  routeSupplierName: string | null;
+  routeSupplierProductCode?: string | null;
+  routeCostPrice?: number | null;
+  latestSnapshotAt: string | null;
+  status: string;
+}
+
+export interface ChannelBalanceRecord {
+  channelId: string;
+  availableBalance: number;
+  frozenBalance: number;
+  currency: string;
+  status: string;
+  updatedAt: string | null;
+}
+
 export interface OpenChannelContext {
   channel: Channel;
-  credential: ChannelCredential;
+  authType: 'SIGN' | 'PORTAL';
+  credential: ChannelCredential | null;
 }
 
 export interface OrderPolicy {

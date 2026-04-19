@@ -14,6 +14,45 @@ export const WorkerJobSchema = t.Object({
   updatedAt: t.String(),
 });
 
+export const WorkerJobAttemptSchema = t.Object({
+  id: t.String(),
+  jobId: t.String(),
+  attemptNo: t.Number(),
+  status: t.String(),
+  errorMessage: t.Nullable(t.String()),
+  durationMs: t.Number(),
+  createdAt: t.String(),
+});
+
+export const WorkerJobItemSchema = t.Object({
+  id: t.String(),
+  jobId: t.String(),
+  itemNo: t.String(),
+  status: t.String(),
+  payloadJson: t.Record(t.String(), t.Unknown()),
+  resultJson: t.Record(t.String(), t.Unknown()),
+  errorMessage: t.Nullable(t.String()),
+  createdAt: t.String(),
+  updatedAt: t.String(),
+});
+
+export const WorkerJobArtifactSchema = t.Object({
+  id: t.String(),
+  jobId: t.String(),
+  artifactType: t.String(),
+  fileName: t.String(),
+  filePath: t.String(),
+  downloadUrl: t.String(),
+  createdAt: t.String(),
+});
+
+export const WorkerJobDetailSchema = t.Object({
+  job: WorkerJobSchema,
+  attempts: t.Array(WorkerJobAttemptSchema),
+  items: t.Array(WorkerJobItemSchema),
+  artifacts: t.Array(WorkerJobArtifactSchema),
+});
+
 export const EnqueueJobBodySchema = t.Object({
   jobType: t.String({ minLength: 1 }),
   businessKey: t.String({ minLength: 1 }),

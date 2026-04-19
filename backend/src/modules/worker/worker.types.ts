@@ -46,6 +46,28 @@ export interface WorkerJobAttempt {
   createdAt: string;
 }
 
+export interface WorkerJobItem {
+  id: string;
+  jobId: string;
+  itemNo: string;
+  status: string;
+  payloadJson: Record<string, unknown>;
+  resultJson: Record<string, unknown>;
+  errorMessage: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkerJobArtifact {
+  id: string;
+  jobId: string;
+  artifactType: string;
+  fileName: string;
+  filePath: string;
+  downloadUrl: string;
+  createdAt: string;
+}
+
 export interface WorkerDeadLetter {
   id: string;
   jobId: string;

@@ -38,6 +38,14 @@ export const AdminProductsQuerySchema = t.Object({
   productType: t.Optional(RechargeProductTypeSchema),
 });
 
+export const OpenProductsQuerySchema = t.Object({
+  carrierCode: t.Optional(RechargeCarrierCodeSchema),
+  province: t.Optional(t.String({ minLength: 1 })),
+  faceValue: t.Optional(t.Numeric({ minimum: 1 })),
+  productType: t.Optional(RechargeProductTypeSchema),
+  status: t.Optional(t.String({ minLength: 1 })),
+});
+
 export const AdminRechargeProductSchema = t.Object({
   id: t.String(),
   productCode: t.String(),
@@ -48,4 +56,17 @@ export const AdminRechargeProductSchema = t.Object({
   productType: RechargeProductTypeSchema,
   salesUnit: t.String(),
   status: RechargeProductStatusSchema,
+});
+
+export const OpenRechargeProductSchema = t.Object({
+  productId: t.String(),
+  productName: t.String(),
+  faceValueFen: t.Number(),
+  salePriceFen: t.Nullable(t.Number()),
+  rechargeRange: t.Array(t.Number()),
+  arrivalSla: t.String(),
+  carrierCode: RechargeCarrierCodeSchema,
+  operator: t.String(),
+  routeStatus: t.String(),
+  splitSupport: t.Boolean(),
 });

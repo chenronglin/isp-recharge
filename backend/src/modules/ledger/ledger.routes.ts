@@ -55,6 +55,9 @@ export function createLedgerRoutes({
           pageSize,
           keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
           status: typeof query.status === 'string' ? query.status : undefined,
+          ownerType: typeof query.ownerType === 'string' ? query.ownerType : undefined,
+          ownerId: typeof query.ownerId === 'string' ? query.ownerId : undefined,
+          currency: typeof query.currency === 'string' ? query.currency : undefined,
           sortBy,
           sortOrder,
         });
@@ -110,8 +113,13 @@ export function createLedgerRoutes({
           accountId: typeof query.accountId === 'string' ? query.accountId : undefined,
           orderNo: typeof query.orderNo === 'string' ? query.orderNo : undefined,
           channelId: typeof query.channelId === 'string' ? query.channelId : undefined,
+          ownerType: typeof query.ownerType === 'string' ? query.ownerType : undefined,
+          ownerId: typeof query.ownerId === 'string' ? query.ownerId : undefined,
           entryType: typeof query.entryType === 'string' ? query.entryType : undefined,
+          direction: typeof query.direction === 'string' ? query.direction : undefined,
           bizNo: typeof query.bizNo === 'string' ? query.bizNo : undefined,
+          referenceType: typeof query.referenceType === 'string' ? query.referenceType : undefined,
+          referenceNo: typeof query.referenceNo === 'string' ? query.referenceNo : undefined,
           sortBy,
           sortOrder,
         });
@@ -158,6 +166,9 @@ export function createLedgerRoutes({
           channelId: params.channelId,
           amount: body.amount,
           referenceNo: requestId,
+          remark: body.remark,
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
         });
 
         await writeAuditLog({

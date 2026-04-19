@@ -1,11 +1,17 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { writeAuditLog } from '@/lib/audit';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
-import { buildPageResult, ok, parsePagination } from '@/lib/http';
+import { buildPageResult, createPageResponseSchema, createSuccessResponseSchema, ok, parsePagination } from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
-import { EnqueueJobBodySchema } from '@/modules/worker/worker.schema';
+import {
+  EnqueueJobBodySchema,
+  WorkerJobArtifactSchema,
+  WorkerJobDetailSchema,
+  WorkerJobItemSchema,
+  WorkerJobSchema,
+} from '@/modules/worker/worker.schema';
 import type { WorkerService } from '@/modules/worker/worker.service';
 
 interface WorkerRoutesDeps {
@@ -29,6 +35,7 @@ export function createWorkerRoutes({ workerService, iamService }: WorkerRoutesDe
         return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        response: createPageResponseSchema(WorkerJobSchema),
         detail: {
           tags: ['admin'],
           summary: '查询异步任务列表',
@@ -47,10 +54,49 @@ export function createWorkerRoutes({ workerService, iamService }: WorkerRoutesDe
         return ok(requestId, await workerService.getById(params.jobId));
       },
       {
+        response: createSuccessResponseSchema(WorkerJobDetailSchema),
         detail: {
           tags: ['admin'],
           summary: '查询异步任务详情',
           description: '后台按任务编号查询 Worker 任务详情、载荷和执行状态。',
+        },
+      },
+    )
+    .get(
+      '/:jobId/items',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
+
+        return ok(requestId, await workerService.listJobItems(params.jobId));
+      },
+      {
+        response: createSuccessResponseSchema(t.Array(WorkerJobItemSchema)),
+        detail: {
+          tags: ['admin'],
+          summary: '查询任务明细项',
+          description: '后台按任务编号查询批量任务逐项处理结果。',
+        },
+      },
+    )
+    .get(
+      '/:jobId/artifacts',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'SUPPORT']);
+
+        return ok(requestId, await workerService.listJobArtifacts(params.jobId));
+      },
+      {
+        response: createSuccessResponseSchema(t.Array(WorkerJobArtifactSchema)),
+        detail: {
+          tags: ['admin'],
+          summary: '查询任务产物',
+          description: '后台查询任务生成的导出文件或回执文件信息。',
         },
       },
     )

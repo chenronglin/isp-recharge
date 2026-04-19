@@ -14,6 +14,8 @@ export interface LedgerEntry {
   id: string;
   ledgerNo: string;
   accountId: string;
+  ownerType?: string;
+  ownerId?: string;
   orderNo: string | null;
   actionType: string;
   direction: string;

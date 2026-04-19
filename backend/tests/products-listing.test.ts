@@ -2,7 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 
 import { buildApp } from '@/app';
 import {
-  buildSeedRechargeProductCode,
+  buildSeedRechargeProductId,
   FIXED_RECHARGE_PRODUCT_COUNT,
   runSeed,
 } from '@/database/seeds/0001_base.seed';
@@ -77,27 +77,27 @@ describe('充值商品列表', () => {
     );
     const json = (await response.json()) as {
       code: number;
-      data: Array<{ productCode: string }>;
+      data: Array<{ productId: string }>;
     };
 
     expect(response.status).toBe(200);
     expect(json.code).toBe(0);
     expect(json.data.length).toBe(FIXED_RECHARGE_PRODUCT_COUNT);
-    expect(json.data.map((item) => item.productCode)).toEqual(
+    expect(json.data.map((item) => item.productId)).toEqual(
       expect.arrayContaining([
-        buildSeedRechargeProductCode({
+        buildSeedRechargeProductId({
           carrierCode: 'CMCC',
           provinceName: '广东',
           productType: 'MIXED',
           faceValue: 50,
         }),
-        buildSeedRechargeProductCode({
+        buildSeedRechargeProductId({
           carrierCode: 'CMCC',
           provinceName: '广东',
           productType: 'FAST',
           faceValue: 100,
         }),
-        buildSeedRechargeProductCode({
+        buildSeedRechargeProductId({
           carrierCode: 'CBN',
           provinceName: '北京',
           productType: 'MIXED',

@@ -1,7 +1,7 @@
-import { badRequest, notFound, unauthorized } from '@/lib/errors';
+import { badRequest, conflict, notFound, unauthorized } from '@/lib/errors';
 import { eventBus } from '@/lib/event-bus';
-import { decryptText, safeEqual, signOpenApiPayload } from '@/lib/security';
-import { stableStringify } from '@/lib/utils';
+import { decryptText, encryptText, safeEqual, signOpenApiPayload } from '@/lib/security';
+import { stableStringify, toAmountFen, toIsoDateTime } from '@/lib/utils';
 import type { OrderContract } from '@/modules/orders/contracts';
 import type { OrderRecord } from '@/modules/orders/orders.types';
 import { MockSupplierAdapter } from '@/modules/suppliers/adapters/mock-supplier.adapter';
@@ -11,6 +11,7 @@ import type { SupplierContract } from '@/modules/suppliers/contracts';
 import { chooseSupplierCandidate } from '@/modules/suppliers/supplier-routing';
 import type { SuppliersRepository as Repository } from '@/modules/suppliers/suppliers.repository';
 import type {
+  SupplierBalanceView,
   SupplierCatalogItem,
   SupplierDynamicItem,
   SupplierReconcileCandidate,
@@ -72,11 +73,198 @@ export class SuppliersService implements SupplierContract {
     private readonly workerContract: WorkerContract,
   ) {}
 
-  async listSuppliers() {
-    return this.repository.listSuppliers();
+  private sanitizeNullableText(value?: string | null) {
+    const normalized = value?.trim();
+    return normalized ? normalized : null;
   }
 
-  async getSupplierBalance(input: { supplierId: string }) {
+  private toSupplierDto(supplier: Awaited<ReturnType<Repository['findSupplierById']>> extends infer T
+    ? T extends null
+      ? never
+      : T
+    : never) {
+    return {
+      supplierId: supplier.id,
+      supplierCode: supplier.supplierCode,
+      supplierName: supplier.supplierName,
+      contactName: supplier.contactName,
+      contactPhone: supplier.contactPhone,
+      contactEmail: supplier.contactEmail,
+      baseUrl: supplier.baseUrl,
+      protocolType: supplier.protocolType,
+      credentialMode: supplier.credentialMode,
+      accessAccount: supplier.accessAccount,
+      accessPassword: supplier.accessPasswordEncrypted ? '******' : null,
+      cooperationStatus: supplier.cooperationStatus,
+      supportsBalanceQuery: supplier.supportsBalanceQuery,
+      supportsRechargeRecords: supplier.supportsRechargeRecords,
+      supportsConsumptionLog: supplier.supportsConsumptionLog,
+      remark: supplier.remark,
+      healthStatus: supplier.healthStatus,
+      lastHealthCheckAt: toIsoDateTime(supplier.lastHealthCheckAt),
+      createdAt: toIsoDateTime(supplier.createdAt) ?? supplier.createdAt,
+      updatedAt: toIsoDateTime(supplier.updatedAt) ?? supplier.updatedAt,
+    };
+  }
+
+  async listSuppliers(input?: {
+    pageNum?: number;
+    pageSize?: number;
+    keyword?: string;
+    cooperationStatus?: string;
+    healthStatus?: string;
+    protocolType?: string;
+    sortBy?: string;
+    sortOrder?: 'asc' | 'desc';
+  }) {
+    const result = await this.repository.listSuppliers(input);
+    return {
+      items: result.items.map((item) => this.toSupplierDto(item)),
+      total: result.total,
+    };
+  }
+
+  async createSupplier(input: {
+    supplierCode: string;
+    supplierName: string;
+    contactName?: string;
+    contactPhone?: string;
+    contactEmail?: string;
+    baseUrl?: string;
+    protocolType: string;
+    credentialMode?: string;
+    accessAccount?: string;
+    accessPassword?: string;
+    cooperationStatus?: string;
+    supportsBalanceQuery?: boolean;
+    supportsRechargeRecords?: boolean;
+    supportsConsumptionLog?: boolean;
+    remark?: string;
+    healthStatus?: string;
+    status?: string;
+  }) {
+    const existing = await this.repository.findSupplierByCode(input.supplierCode.trim());
+
+    if (existing) {
+      throw conflict('供应商编码已存在');
+    }
+
+    const supplier = await this.repository.createSupplier({
+      supplierCode: input.supplierCode.trim(),
+      supplierName: input.supplierName.trim(),
+      contactName: this.sanitizeNullableText(input.contactName),
+      contactPhone: this.sanitizeNullableText(input.contactPhone),
+      contactEmail: this.sanitizeNullableText(input.contactEmail),
+      baseUrl: this.sanitizeNullableText(input.baseUrl),
+      protocolType: input.protocolType.trim(),
+      credentialMode: this.sanitizeNullableText(input.credentialMode) ?? 'TOKEN',
+      accessAccount: this.sanitizeNullableText(input.accessAccount),
+      accessPasswordEncrypted: this.sanitizeNullableText(input.accessPassword)
+        ? encryptText(String(input.accessPassword))
+        : null,
+      cooperationStatus: this.sanitizeNullableText(input.cooperationStatus) ?? 'ACTIVE',
+      supportsBalanceQuery: input.supportsBalanceQuery ?? true,
+      supportsRechargeRecords: input.supportsRechargeRecords ?? false,
+      supportsConsumptionLog: input.supportsConsumptionLog ?? false,
+      remark: this.sanitizeNullableText(input.remark),
+      healthStatus: this.sanitizeNullableText(input.healthStatus) ?? 'UNKNOWN',
+      status: this.sanitizeNullableText(input.status) ?? 'ACTIVE',
+    });
+
+    return this.toSupplierDto(supplier);
+  }
+
+  async getSupplierById(supplierId: string) {
+    const supplier = await this.repository.findSupplierById(supplierId);
+
+    if (!supplier) {
+      throw notFound('供应商不存在');
+    }
+
+    return this.toSupplierDto(supplier);
+  }
+
+  async updateSupplier(
+    supplierId: string,
+    input: {
+      supplierName?: string;
+      contactName?: string;
+      contactPhone?: string;
+      contactEmail?: string;
+      baseUrl?: string;
+      protocolType?: string;
+      credentialMode?: string;
+      accessAccount?: string;
+      accessPassword?: string;
+      cooperationStatus?: string;
+      supportsBalanceQuery?: boolean;
+      supportsRechargeRecords?: boolean;
+      supportsConsumptionLog?: boolean;
+      remark?: string;
+      healthStatus?: string;
+      status?: string;
+    },
+  ) {
+    const existing = await this.repository.findSupplierById(supplierId);
+
+    if (!existing) {
+      throw notFound('供应商不存在');
+    }
+
+    const updated = await this.repository.updateSupplier(supplierId, {
+      supplierName: this.sanitizeNullableText(input.supplierName) ?? existing.supplierName,
+      contactName: this.sanitizeNullableText(input.contactName),
+      contactPhone: this.sanitizeNullableText(input.contactPhone),
+      contactEmail: this.sanitizeNullableText(input.contactEmail),
+      baseUrl: this.sanitizeNullableText(input.baseUrl),
+      protocolType: this.sanitizeNullableText(input.protocolType) ?? existing.protocolType,
+      credentialMode: this.sanitizeNullableText(input.credentialMode) ?? existing.credentialMode,
+      accessAccount: this.sanitizeNullableText(input.accessAccount),
+      accessPasswordEncrypted: this.sanitizeNullableText(input.accessPassword)
+        ? encryptText(String(input.accessPassword))
+        : null,
+      cooperationStatus:
+        this.sanitizeNullableText(input.cooperationStatus) ?? existing.cooperationStatus,
+      supportsBalanceQuery: input.supportsBalanceQuery ?? existing.supportsBalanceQuery,
+      supportsRechargeRecords: input.supportsRechargeRecords ?? existing.supportsRechargeRecords,
+      supportsConsumptionLog: input.supportsConsumptionLog ?? existing.supportsConsumptionLog,
+      remark: this.sanitizeNullableText(input.remark),
+      healthStatus: this.sanitizeNullableText(input.healthStatus) ?? existing.healthStatus,
+      status: this.sanitizeNullableText(input.status) ?? existing.status,
+    });
+
+    if (!updated) {
+      throw notFound('供应商不存在');
+    }
+
+    return this.toSupplierDto(updated);
+  }
+
+  async getSupplierBalance(input: { supplierId: string }): Promise<SupplierBalanceView> {
+    const supplier = await this.repository.findSupplierById(input.supplierId);
+
+    if (!supplier) {
+      throw notFound('供应商不存在');
+    }
+
+    const latest = await this.repository.findLatestBalanceSnapshot(supplier.id);
+
+    if (!latest) {
+      return this.refreshSupplierBalance(input);
+    }
+
+    return {
+      supplierId: latest.supplierId,
+      balanceAmountFen: toAmountFen(latest.balanceAmount) ?? 0,
+      currency: latest.currency,
+      balanceStatus: latest.balanceStatus,
+      sourceType: latest.sourceType,
+      queriedAt: toIsoDateTime(latest.queriedAt) ?? latest.queriedAt,
+      rawPayload: latest.rawPayloadJson,
+    };
+  }
+
+  async refreshSupplierBalance(input: { supplierId: string }): Promise<SupplierBalanceView> {
     const supplier = await this.repository.findSupplierById(input.supplierId);
 
     if (!supplier) {
@@ -103,8 +291,24 @@ export class SuppliersService implements SupplierContract {
         requestStatus: 'SUCCESS',
         durationMs: Date.now() - startedAt,
       });
+      const snapshot = await this.repository.addBalanceSnapshot({
+        supplierId: supplier.id,
+        balanceAmount: Number(result.agentBalance ?? 0),
+        currency: 'CNY',
+        balanceStatus: result.errorCode === 0 ? 'AVAILABLE' : 'ERROR',
+        sourceType: 'API_QUERY',
+        rawPayloadJson: result as unknown as Record<string, unknown>,
+      });
 
-      return result;
+      return {
+        supplierId: snapshot.supplierId,
+        balanceAmountFen: toAmountFen(snapshot.balanceAmount) ?? 0,
+        currency: snapshot.currency,
+        balanceStatus: snapshot.balanceStatus,
+        sourceType: snapshot.sourceType,
+        queriedAt: toIsoDateTime(snapshot.queriedAt) ?? snapshot.queriedAt,
+        rawPayload: snapshot.rawPayloadJson,
+      };
     } catch (error) {
       await this.repository.addRequestLog({
         supplierId: supplier.id,
@@ -120,6 +324,100 @@ export class SuppliersService implements SupplierContract {
       await this.refreshRuntimeBreakerState(supplier.id);
       throw error;
     }
+  }
+
+  async getSupplierHealth(input: { supplierId: string }) {
+    const supplier = await this.repository.findSupplierById(input.supplierId);
+
+    if (!supplier) {
+      throw notFound('供应商不存在');
+    }
+
+    const latest = await this.repository.findLatestHealthCheck(supplier.id);
+
+    if (!latest) {
+      return {
+        supplierId: supplier.id,
+        healthStatus: supplier.healthStatus,
+        httpStatus: null,
+        message: null,
+        lastSuccessAt: null,
+        lastFailureAt: null,
+        checkedAt: toIsoDateTime(supplier.lastHealthCheckAt),
+      };
+    }
+
+    return {
+      supplierId: latest.supplierId,
+      healthStatus: latest.healthStatus,
+      httpStatus: latest.httpStatus,
+      message: latest.message,
+      lastSuccessAt: toIsoDateTime(latest.lastSuccessAt),
+      lastFailureAt: toIsoDateTime(latest.lastFailureAt),
+      checkedAt: toIsoDateTime(latest.checkedAt) ?? latest.checkedAt,
+    };
+  }
+
+  async listConsumptionLogs(input: {
+    supplierId: string;
+    startTime?: string | null;
+    endTime?: string | null;
+    mobile?: string;
+    orderNo?: string;
+    supplierOrderNo?: string;
+  }) {
+    const supplier = await this.repository.findSupplierById(input.supplierId);
+
+    if (!supplier) {
+      throw notFound('供应商不存在');
+    }
+
+    if (!supplier.supportsConsumptionLog) {
+      throw badRequest('当前供应商不支持消费日志');
+    }
+
+    const rows = await this.repository.listConsumptionLogs(input);
+    return rows.map((row) => ({
+      id: row.id,
+      supplierId: row.supplierId,
+      mobile: row.mobile,
+      orderNo: row.orderNo,
+      supplierOrderNo: row.supplierOrderNo,
+      amountFen: toAmountFen(row.amount) ?? 0,
+      status: row.status,
+      occurredAt: toIsoDateTime(row.occurredAt) ?? row.occurredAt,
+      rawPayload: row.rawPayloadJson,
+    }));
+  }
+
+  async listSupplierProducts(input: {
+    supplierId: string;
+    carrierCode?: string;
+    province?: string;
+    faceValue?: number;
+    status?: string;
+    updatedStartTime?: string | null;
+    updatedEndTime?: string | null;
+  }) {
+    await this.getSupplierById(input.supplierId);
+    const rows = await this.repository.listSupplierProducts(input);
+    return rows.map((row) => ({
+      snapshotId: row.snapshotId,
+      supplierId: row.supplierId,
+      supplierCode: row.supplierCode,
+      supplierProductCode: row.supplierProductCode,
+      productName: row.productName,
+      carrierCode: row.carrierCode,
+      province: row.province,
+      faceValueFen: toAmountFen(Number(row.faceValue)) ?? 0,
+      costPriceFen: toAmountFen(Number(row.costPrice)) ?? 0,
+      saleStatus: row.saleStatus,
+      stockStatus: row.stockStatus,
+      arrivalSla: row.arrivalSla,
+      rechargeRange: row.rechargeRange,
+      updatedAt: toIsoDateTime(row.updatedAt) ?? row.updatedAt,
+      rawPayload: row.rawPayload,
+    }));
   }
 
   async triggerCatalogSync(input: { supplierId: string }) {
@@ -154,8 +452,98 @@ export class SuppliersService implements SupplierContract {
     credential: string;
     callbackSecret: string;
     timeoutMs: number;
+    updatedBy?: string | null;
   }) {
     await this.repository.upsertConfig(input);
+    const config = await this.repository.findConfigBySupplierId(input.supplierId);
+
+    if (!config) {
+      throw notFound('供应商配置不存在');
+    }
+
+    return {
+      supplierId: config.supplierId,
+      timeoutMs: config.timeoutMs,
+      credential: '******',
+      callbackSecret: '******',
+      configJson: config.configJson,
+      updatedAt: toIsoDateTime(config.updatedAt) ?? null,
+      updatedBy: config.updatedBy ?? null,
+    };
+  }
+
+  async listRechargeRecords(input: { supplierId: string }) {
+    await this.getSupplierById(input.supplierId);
+    const rows = await this.repository.listRechargeRecords(input.supplierId);
+    return rows.map((row) => ({
+      recordId: row.id,
+      supplierId: row.supplierId,
+      rechargeType: row.rechargeType,
+      amountFen: toAmountFen(row.amount) ?? 0,
+      currency: row.currency,
+      beforeBalanceFen: toAmountFen(row.beforeBalance) ?? 0,
+      afterBalanceFen: toAmountFen(row.afterBalance) ?? 0,
+      recordSource: row.recordSource,
+      supplierTradeNo: row.supplierTradeNo,
+      remark: row.remark,
+      rawPayload: row.rawPayloadJson,
+      status: row.status,
+      operatorUserId: row.operatorUserId,
+      operatorUsername: row.operatorUsername,
+      createdAt: toIsoDateTime(row.createdAt) ?? row.createdAt,
+    }));
+  }
+
+  async createRechargeRecord(input: {
+    supplierId: string;
+    rechargeType: string;
+    amountFen: number;
+    currency?: string;
+    beforeBalanceFen?: number;
+    afterBalanceFen?: number;
+    recordSource: string;
+    supplierTradeNo?: string;
+    remark?: string;
+    rawPayload?: Record<string, unknown>;
+    status?: string;
+    operatorUserId?: string | null;
+    operatorUsername?: string | null;
+  }) {
+    await this.getSupplierById(input.supplierId);
+    const record = await this.repository.createRechargeRecord({
+      supplierId: input.supplierId,
+      rechargeType: input.rechargeType,
+      amount: input.amountFen / 100,
+      currency: input.currency ?? 'CNY',
+      beforeBalance: (input.beforeBalanceFen ?? 0) / 100,
+      afterBalance: (input.afterBalanceFen ?? 0) / 100,
+      recordSource: input.recordSource,
+      supplierTradeNo: this.sanitizeNullableText(input.supplierTradeNo),
+      remark: this.sanitizeNullableText(input.remark),
+      rawPayloadJson: input.rawPayload ?? {},
+      status: input.status ?? 'SUCCESS',
+      operatorUserId: input.operatorUserId ?? null,
+      operatorUsername: input.operatorUsername ?? null,
+      syncedAt: input.recordSource === 'API_SYNC' ? new Date() : null,
+    });
+
+    return {
+      recordId: record.id,
+      supplierId: record.supplierId,
+      rechargeType: record.rechargeType,
+      amountFen: toAmountFen(record.amount) ?? 0,
+      currency: record.currency,
+      beforeBalanceFen: toAmountFen(record.beforeBalance) ?? 0,
+      afterBalanceFen: toAmountFen(record.afterBalance) ?? 0,
+      recordSource: record.recordSource,
+      supplierTradeNo: record.supplierTradeNo,
+      remark: record.remark,
+      rawPayload: record.rawPayloadJson,
+      status: record.status,
+      operatorUserId: record.operatorUserId,
+      operatorUsername: record.operatorUsername,
+      createdAt: toIsoDateTime(record.createdAt) ?? record.createdAt,
+    };
   }
 
   async listReconcileDiffs(input?: { reconcileDate?: string; orderNo?: string }) {
@@ -890,7 +1278,7 @@ export class SuppliersService implements SupplierContract {
       return [await this.requireSupplierByCode(supplierCode)];
     }
 
-    const suppliers = await this.repository.listSuppliers();
+    const { items: suppliers } = await this.repository.listSuppliers();
     const syncableSuppliers = [];
 
     for (const supplier of suppliers) {

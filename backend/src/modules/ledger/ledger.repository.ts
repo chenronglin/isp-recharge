@@ -30,6 +30,9 @@ export class LedgerRepository {
     pageSize: number;
     keyword?: string;
     status?: string;
+    ownerType?: string;
+    ownerId?: string;
+    currency?: string;
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
   }): Promise<{ items: Account[]; total: number }> {
@@ -53,6 +56,21 @@ export class LedgerRepository {
     if (input.status?.trim()) {
       params.push(input.status.trim());
       whereClauses.push(`status = $${params.length}`);
+    }
+
+    if (input.ownerType?.trim()) {
+      params.push(input.ownerType.trim());
+      whereClauses.push(`owner_type = $${params.length}`);
+    }
+
+    if (input.ownerId?.trim()) {
+      params.push(input.ownerId.trim());
+      whereClauses.push(`owner_id = $${params.length}`);
+    }
+
+    if (input.currency?.trim()) {
+      params.push(input.currency.trim());
+      whereClauses.push(`currency = $${params.length}`);
     }
 
     const whereSql = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
@@ -105,8 +123,13 @@ export class LedgerRepository {
     accountId?: string;
     orderNo?: string;
     channelId?: string;
+    ownerType?: string;
+    ownerId?: string;
     entryType?: string;
+    direction?: string;
     bizNo?: string;
+    referenceType?: string;
+    referenceNo?: string;
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
   }): Promise<{ items: LedgerEntry[]; total: number }> {
@@ -130,8 +153,13 @@ export class LedgerRepository {
     const exactConditions: Array<[string, string | undefined]> = [
       ['ledgers.account_id', input.accountId],
       ['ledgers.order_no', input.orderNo],
+      ['accounts.owner_type', input.ownerType],
+      ['accounts.owner_id', input.ownerId],
       ['ledgers.action_type', input.entryType],
+      ['ledgers.direction', input.direction],
       ['ledgers.reference_no', input.bizNo],
+      ['ledgers.reference_type', input.referenceType],
+      ['ledgers.reference_no', input.referenceNo],
       ['accounts.owner_id', input.channelId],
     ];
 
@@ -169,6 +197,8 @@ export class LedgerRepository {
           ledgers.id,
           ledgers.ledger_no AS "ledgerNo",
           ledgers.account_id AS "accountId",
+          accounts.owner_type AS "ownerType",
+          accounts.owner_id AS "ownerId",
           ledgers.order_no AS "orderNo",
           ledgers.action_type AS "actionType",
           ledgers.direction,
@@ -521,6 +551,187 @@ export class LedgerRepository {
           ${creditRow.balanceAfter},
           'ORDER',
           ${input.referenceNo},
+          NOW()
+        )
+      `;
+
+      return {
+        referenceNo: input.referenceNo,
+      };
+    });
+  }
+
+  async rechargeChannelBalance(input: {
+    channelId: string;
+    amount: number;
+    referenceNo: string;
+    remark?: string | null;
+    operatorUserId?: string | null;
+    operatorUsername?: string | null;
+  }): Promise<{ referenceNo: string }> {
+    return db.begin(async (tx) => {
+      await this.lockLedgerMutation(tx, `ledger:CHANNEL_RECHARGE:CHANNEL:${input.referenceNo}`);
+
+      const existing = await first<LedgerEntry>(tx<LedgerEntry[]>`
+        SELECT
+          id,
+          ledger_no AS "ledgerNo",
+          account_id AS "accountId",
+          order_no AS "orderNo",
+          action_type AS "actionType",
+          direction,
+          amount,
+          currency,
+          balance_before AS "balanceBefore",
+          balance_after AS "balanceAfter",
+          reference_type AS "referenceType",
+          reference_no AS "referenceNo",
+          created_at AS "createdAt"
+        FROM ledger.account_ledgers
+        WHERE reference_type = 'CHANNEL_RECHARGE'
+          AND reference_no = ${input.referenceNo}
+          AND action_type = 'CHANNEL_RECHARGE'
+        LIMIT 1
+      `);
+
+      if (existing) {
+        return {
+          referenceNo: existing.referenceNo,
+        };
+      }
+
+      await tx`
+        INSERT INTO ledger.accounts (
+          id,
+          owner_type,
+          owner_id,
+          available_balance,
+          frozen_balance,
+          currency,
+          status,
+          created_at,
+          updated_at
+        )
+        VALUES (
+          ${generateId()},
+          'CHANNEL',
+          ${input.channelId},
+          0,
+          0,
+          'CNY',
+          'ACTIVE',
+          NOW(),
+          NOW()
+        )
+        ON CONFLICT (owner_type, owner_id, currency) DO UPDATE
+        SET
+          status = 'ACTIVE',
+          updated_at = NOW()
+      `;
+
+      const accountRows = await tx<Account[]>`
+        SELECT
+          id,
+          owner_type AS "ownerType",
+          owner_id AS "ownerId",
+          available_balance AS "availableBalance",
+          frozen_balance AS "frozenBalance",
+          currency,
+          status
+        FROM ledger.accounts
+        WHERE owner_type = 'CHANNEL'
+          AND owner_id = ${input.channelId}
+          AND currency = 'CNY'
+        LIMIT 1
+        FOR UPDATE
+      `;
+      const account = accountRows[0];
+
+      if (!account) {
+        throw new Error('渠道余额账户创建失败');
+      }
+
+      const balanceRows = await tx<
+        {
+          balanceBefore: string;
+          balanceAfter: string;
+        }[]
+      >`
+        UPDATE ledger.accounts
+        SET
+          available_balance = available_balance + ${input.amount},
+          updated_at = NOW()
+        WHERE id = ${account.id}
+        RETURNING
+          (available_balance - ${input.amount})::text AS "balanceBefore",
+          available_balance::text AS "balanceAfter"
+      `;
+      const balanceRow = balanceRows[0];
+
+      if (!balanceRow) {
+        throw new Error('渠道余额账户更新失败');
+      }
+
+      await tx`
+        INSERT INTO ledger.account_ledgers (
+          id,
+          ledger_no,
+          account_id,
+          order_no,
+          action_type,
+          direction,
+          amount,
+          currency,
+          balance_before,
+          balance_after,
+          reference_type,
+          reference_no,
+          created_at
+        )
+        VALUES (
+          ${generateId()},
+          ${generateBusinessNo('ledger')},
+          ${account.id},
+          NULL,
+          'CHANNEL_RECHARGE',
+          'CREDIT',
+          ${input.amount},
+          'CNY',
+          ${balanceRow.balanceBefore},
+          ${balanceRow.balanceAfter},
+          'CHANNEL_RECHARGE',
+          ${input.referenceNo},
+          NOW()
+        )
+      `;
+
+      await tx`
+        INSERT INTO channel.channel_recharge_records (
+          id,
+          channel_id,
+          reference_no,
+          amount,
+          before_balance,
+          after_balance,
+          currency,
+          record_source,
+          remark,
+          operator_user_id,
+          operator_username,
+          created_at
+        )
+        VALUES (
+          ${generateId()},
+          ${input.channelId},
+          ${input.referenceNo},
+          ${input.amount},
+          ${balanceRow.balanceBefore},
+          ${balanceRow.balanceAfter},
+          'CNY',
+          'ADMIN_MANUAL',
+          ${input.remark ?? null},
+          ${input.operatorUserId ?? null},
+          ${input.operatorUsername ?? null},
           NOW()
         )
       `;

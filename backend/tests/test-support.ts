@@ -29,61 +29,57 @@ export async function releaseIntegrationTestLock() {
 }
 
 export async function resetTestState() {
-  await db.unsafe(`
-    ALTER TABLE iam.admin_users
-      ADD COLUMN IF NOT EXISTS failed_login_attempts INTEGER NOT NULL DEFAULT 0,
-      ADD COLUMN IF NOT EXISTS locked_until TIMESTAMPTZ;
-
-    CREATE TABLE IF NOT EXISTS iam.login_logs (
-      id TEXT PRIMARY KEY,
-      user_id TEXT NULL REFERENCES iam.admin_users(id),
-      username TEXT NOT NULL,
-      ip TEXT NOT NULL,
-      device_summary TEXT NOT NULL DEFAULT '',
-      result TEXT NOT NULL,
-      failure_reason TEXT NULL,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    );
-
-    CREATE TABLE IF NOT EXISTS supplier.supplier_orders (
-      id TEXT PRIMARY KEY,
-      order_no TEXT NOT NULL,
-      supplier_id TEXT NOT NULL,
-      supplier_order_no TEXT NOT NULL UNIQUE,
-      request_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-      response_payload_json JSONB NOT NULL DEFAULT '{}'::jsonb,
-      standard_status TEXT NOT NULL,
-      attempt_no INTEGER NOT NULL DEFAULT 1,
-      duration_ms INTEGER NOT NULL DEFAULT 0,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (order_no, supplier_id)
-    )
-  `);
   await db`
     TRUNCATE TABLE
+      worker.worker_job_artifacts,
+      worker.worker_job_items,
       worker.worker_job_attempts,
       worker.worker_dead_letters,
       worker.worker_jobs,
       notification.notification_delivery_logs,
       notification.notification_dead_letters,
       notification.notification_tasks,
+      iam.user_role_relations,
       iam.login_logs,
       iam.login_sessions,
       iam.operation_audit_logs,
+      channel.portal_login_logs,
+      channel.portal_login_sessions,
+      channel.channel_recharge_records,
       channel.channel_request_nonces,
-      risk.risk_decisions,
+      channel.channel_split_policies,
+      channel.channel_callback_configs,
+      channel.channel_limit_rules,
+      channel.channel_price_policies,
+      channel.channel_product_authorizations,
+      channel.channel_api_credentials,
       risk.risk_black_white_list,
+      risk.risk_decisions,
       risk.risk_rules,
+      supplier.supplier_recharge_records,
+      supplier.supplier_consumption_logs,
+      supplier.supplier_health_checks,
+      supplier.supplier_balance_snapshots,
       supplier.supplier_reconcile_diffs,
       supplier.supplier_runtime_breakers,
       supplier.supplier_callback_logs,
       supplier.supplier_request_logs,
       supplier.supplier_orders,
+      supplier.supplier_configs,
+      product.product_supplier_mappings,
       product.product_sync_logs,
+      ordering.order_groups,
       ordering.order_events,
       ordering.orders,
-      ledger.account_ledgers
+      ledger.account_ledgers,
+      ledger.accounts,
+      product.mobile_segments,
+      product.recharge_products,
+      supplier.suppliers,
+      channel.channels,
+      iam.roles,
+      iam.admin_users
+    RESTART IDENTITY CASCADE
   `;
 
   await runSeed(db);

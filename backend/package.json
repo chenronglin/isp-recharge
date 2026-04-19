@@ -10,7 +10,8 @@
     "lint": "biome check src tests",
     "format": "biome check --write src tests",
     "db:migrate": "bun run src/database/migrate.ts",
-    "db:seed": "bun run src/database/seed.ts"
+    "db:seed": "bun run src/database/seed.ts",
+    "openapi:generate": "bun run src/scripts/generate-openapi.ts"
   },
   "dependencies": {
     "@elysiajs/cors": "^1.4.1",

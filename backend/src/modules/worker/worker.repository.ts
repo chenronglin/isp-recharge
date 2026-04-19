@@ -4,6 +4,9 @@ import { parseJsonValue } from '@/lib/utils';
 import { workerSql } from '@/modules/worker/worker.sql';
 import type {
   CreateWorkerJobInput,
+  WorkerJobArtifact,
+  WorkerJobAttempt,
+  WorkerJobItem,
   WorkerDeadLetter,
   WorkerJob,
 } from '@/modules/worker/worker.types';
@@ -13,6 +16,14 @@ export class WorkerRepository {
     return {
       ...row,
       payloadJson: parseJsonValue(row.payloadJson, {}),
+    };
+  }
+
+  private mapJobItem(row: WorkerJobItem): WorkerJobItem {
+    return {
+      ...row,
+      payloadJson: parseJsonValue(row.payloadJson, {}),
+      resultJson: parseJsonValue(row.resultJson, {}),
     };
   }
 
@@ -185,6 +196,58 @@ export class WorkerRepository {
     `);
 
     return row ? this.mapJob(row) : null;
+  }
+
+  async listAttempts(jobId: string): Promise<WorkerJobAttempt[]> {
+    return db<WorkerJobAttempt[]>`
+      SELECT
+        id,
+        job_id AS "jobId",
+        attempt_no AS "attemptNo",
+        status,
+        error_message AS "errorMessage",
+        duration_ms AS "durationMs",
+        created_at AS "createdAt"
+      FROM worker.worker_job_attempts
+      WHERE job_id = ${jobId}
+      ORDER BY attempt_no DESC, created_at DESC
+    `;
+  }
+
+  async listItems(jobId: string): Promise<WorkerJobItem[]> {
+    const rows = await db<WorkerJobItem[]>`
+      SELECT
+        id,
+        job_id AS "jobId",
+        item_no AS "itemNo",
+        status,
+        payload_json AS "payloadJson",
+        result_json AS "resultJson",
+        error_message AS "errorMessage",
+        created_at AS "createdAt",
+        updated_at AS "updatedAt"
+      FROM worker.worker_job_items
+      WHERE job_id = ${jobId}
+      ORDER BY item_no ASC, created_at ASC
+    `;
+
+    return rows.map((row) => this.mapJobItem(row));
+  }
+
+  async listArtifacts(jobId: string): Promise<WorkerJobArtifact[]> {
+    return db<WorkerJobArtifact[]>`
+      SELECT
+        id,
+        job_id AS "jobId",
+        artifact_type AS "artifactType",
+        file_name AS "fileName",
+        file_path AS "filePath",
+        download_url AS "downloadUrl",
+        created_at AS "createdAt"
+      FROM worker.worker_job_artifacts
+      WHERE job_id = ${jobId}
+      ORDER BY created_at DESC, id DESC
+    `;
   }
 
   async claimReady(limit: number): Promise<WorkerJob[]> {
@@ -393,5 +456,75 @@ export class WorkerRepository {
 
   async listDeadLetters(): Promise<WorkerDeadLetter[]> {
     return db.unsafe<WorkerDeadLetter[]>(workerSql.listDeadLetters);
+  }
+
+  async upsertJobItem(input: {
+    jobId: string;
+    itemNo: string;
+    status: string;
+    payloadJson?: Record<string, unknown>;
+    resultJson?: Record<string, unknown>;
+    errorMessage?: string | null;
+  }): Promise<void> {
+    await db`
+      INSERT INTO worker.worker_job_items (
+        id,
+        job_id,
+        item_no,
+        status,
+        payload_json,
+        result_json,
+        error_message,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        ${generateId()},
+        ${input.jobId},
+        ${input.itemNo},
+        ${input.status},
+        ${JSON.stringify(input.payloadJson ?? {})},
+        ${JSON.stringify(input.resultJson ?? {})},
+        ${input.errorMessage ?? null},
+        NOW(),
+        NOW()
+      )
+      ON CONFLICT (job_id, item_no) DO UPDATE
+      SET
+        status = EXCLUDED.status,
+        payload_json = EXCLUDED.payload_json,
+        result_json = EXCLUDED.result_json,
+        error_message = EXCLUDED.error_message,
+        updated_at = NOW()
+    `;
+  }
+
+  async createArtifact(input: {
+    jobId: string;
+    artifactType: string;
+    fileName: string;
+    filePath: string;
+    downloadUrl: string;
+  }): Promise<void> {
+    await db`
+      INSERT INTO worker.worker_job_artifacts (
+        id,
+        job_id,
+        artifact_type,
+        file_name,
+        file_path,
+        download_url,
+        created_at
+      )
+      VALUES (
+        ${generateId()},
+        ${input.jobId},
+        ${input.artifactType},
+        ${input.fileName},
+        ${input.filePath},
+        ${input.downloadUrl},
+        NOW()
+      )
+    `;
   }
 }

@@ -189,7 +189,63 @@ export class WorkerService implements WorkerContract {
       throw notFound('任务不存在');
     }
 
-    return job;
+    const [attempts, items, artifacts] = await Promise.all([
+      this.repository.listAttempts(jobId),
+      this.repository.listItems(jobId),
+      this.repository.listArtifacts(jobId),
+    ]);
+
+    return {
+      job,
+      attempts,
+      items,
+      artifacts,
+    };
+  }
+
+  async listJobItems(jobId: string) {
+    const job = await this.repository.getById(jobId);
+
+    if (!job) {
+      throw notFound('任务不存在');
+    }
+
+    return this.repository.listItems(jobId);
+  }
+
+  async listJobArtifacts(jobId: string) {
+    const job = await this.repository.getById(jobId);
+
+    if (!job) {
+      throw notFound('任务不存在');
+    }
+
+    return this.repository.listArtifacts(jobId);
+  }
+
+  async upsertJobItem(input: {
+    jobId: string;
+    itemNo: string;
+    status: string;
+    payloadJson?: Record<string, unknown>;
+    resultJson?: Record<string, unknown>;
+    errorMessage?: string | null;
+  }) {
+    await this.repository.upsertJobItem(input);
+  }
+
+  async createArtifact(input: {
+    jobId: string;
+    artifactType: string;
+    fileName: string;
+    filePath: string;
+    downloadUrl: string;
+  }) {
+    await this.repository.createArtifact(input);
+  }
+
+  async completeJob(jobId: string) {
+    await this.repository.markSuccess(jobId);
   }
 
   async bootstrapRecurringSchedules(): Promise<void> {

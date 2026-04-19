@@ -34,6 +34,8 @@ export class LedgerService implements LedgerContract {
     id: string;
     ledgerNo: string;
     accountId: string;
+    ownerType?: string;
+    ownerId?: string;
     orderNo: string | null;
     actionType: string;
     direction: string;
@@ -49,6 +51,8 @@ export class LedgerService implements LedgerContract {
       id: entry.id,
       ledgerNo: entry.ledgerNo,
       accountId: entry.accountId,
+      ownerType: entry.ownerType ?? null,
+      ownerId: entry.ownerId ?? null,
       orderNo: entry.orderNo,
       actionType: entry.actionType,
       direction: entry.direction,
@@ -67,6 +71,9 @@ export class LedgerService implements LedgerContract {
     pageSize: number;
     keyword?: string;
     status?: string;
+    ownerType?: string;
+    ownerId?: string;
+    currency?: string;
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
   }) {
@@ -96,8 +103,13 @@ export class LedgerService implements LedgerContract {
     accountId?: string;
     orderNo?: string;
     channelId?: string;
+    ownerType?: string;
+    ownerId?: string;
     entryType?: string;
+    direction?: string;
     bizNo?: string;
+    referenceType?: string;
+    referenceNo?: string;
     sortBy?: string;
     sortOrder?: 'asc' | 'desc';
   }) {
@@ -122,21 +134,21 @@ export class LedgerService implements LedgerContract {
     channelId: string;
     amount: number;
     referenceNo: string;
+    remark?: string | null;
+    operatorUserId?: string | null;
+    operatorUsername?: string | null;
   }): Promise<{ referenceNo: string }> {
     if (!Number.isFinite(input.amount) || input.amount <= 0) {
       throw badRequest('充值金额必须大于 0');
     }
 
-    const channelAccount = await this.repository.ensureChannelAccount(input.channelId);
-
-    return this.repository.createSingleLedger({
-      accountId: channelAccount.id,
-      orderNo: null,
-      actionType: 'CHANNEL_RECHARGE',
-      direction: 'CREDIT',
+    return this.repository.rechargeChannelBalance({
+      channelId: input.channelId,
       amount: Number(input.amount),
-      referenceType: 'CHANNEL_RECHARGE',
       referenceNo: input.referenceNo,
+      remark: input.remark ?? null,
+      operatorUserId: input.operatorUserId ?? null,
+      operatorUsername: input.operatorUsername ?? null,
     });
   }
 

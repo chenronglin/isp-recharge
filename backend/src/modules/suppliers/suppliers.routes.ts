@@ -1,16 +1,37 @@
-import { Elysia } from 'elysia';
+import { Elysia, t } from 'elysia';
 import type { AuditInput } from '@/lib/audit';
 import { requireAnyAdminRole } from '@/lib/admin-roles';
 import { verifyAdminAuthorizationHeader, verifyInternalAuthorizationHeader } from '@/lib/auth';
 import { badRequest } from '@/lib/errors';
-import { ok } from '@/lib/http';
+import {
+  buildOperationResult,
+  buildPageResult,
+  createPageResponseSchema,
+  createSuccessResponseSchema,
+  ok,
+  OperationResultSchema,
+  parsePagination,
+  parseSort,
+} from '@/lib/http';
 import { getClientIpFromRequest, getRequestIdFromRequest } from '@/lib/route-meta';
 import type { IamService } from '@/modules/iam/iam.service';
 import {
+  CreateSupplierRechargeRecordBodySchema,
   SupplierCatalogDeltaSyncBodySchema,
   SupplierCatalogFullSyncBodySchema,
   CreateSupplierConfigBodySchema,
+  SaveSupplierBodySchema,
+  SupplierBalanceSchema,
+  SupplierConfigSchema,
+  SupplierConsumptionLogQuerySchema,
+  SupplierConsumptionLogSchema,
+  SupplierHealthSchema,
+  SupplierProductsQuerySchema,
+  SupplierProductSnapshotSchema,
+  SupplierRechargeRecordSchema,
   SupplierReconcileBodySchema,
+  SupplierSchema,
+  SuppliersListQuerySchema,
   SupplierQueryBodySchema,
   SupplierSubmitBodySchema,
 } from '@/modules/suppliers/suppliers.schema';
@@ -56,18 +77,148 @@ export function createSuppliersRoutes({
   const adminRoutes = new Elysia()
     .get(
       '/admin/suppliers',
-      async ({ request }) => {
+      async ({ query, request }) => {
         const requestId = getRequestIdFromRequest(request);
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const admin = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(admin, ['OPS']);
-        return ok(requestId, await suppliersService.listSuppliers());
+        const { pageNum, pageSize } = parsePagination(query as Record<string, unknown>);
+        const { sortBy, sortOrder } = parseSort(
+          query as Record<string, unknown>,
+          'createdAt',
+          'desc',
+        );
+        const result = await suppliersService.listSuppliers({
+          pageNum,
+          pageSize,
+          keyword: typeof query.keyword === 'string' ? query.keyword : undefined,
+          cooperationStatus:
+            typeof query.cooperationStatus === 'string' ? query.cooperationStatus : undefined,
+          healthStatus: typeof query.healthStatus === 'string' ? query.healthStatus : undefined,
+          protocolType: typeof query.protocolType === 'string' ? query.protocolType : undefined,
+          sortBy,
+          sortOrder,
+        });
+        return ok(requestId, buildPageResult(result.items, pageNum, pageSize, result.total));
       },
       {
+        query: SuppliersListQuerySchema,
+        response: createPageResponseSchema(SupplierSchema),
         detail: {
           tags: ['admin'],
           summary: '查询供应商列表',
-          description: '后台查询供应商基础资料、协议类型与启用状态信息。',
+          description: '后台查询供应商基础资料、健康状态、协议类型和合作状态。',
+        },
+      },
+    )
+    .post(
+      '/admin/suppliers',
+      async ({ body, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
+        const supplier = await suppliersService.createSupplier({
+          ...body,
+          supplierCode: body.supplierCode ?? '',
+        });
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'CREATE_SUPPLIER',
+          resourceType: 'SUPPLIER',
+          resourceId: supplier.supplierId,
+          details: body,
+          requestId,
+          ip: clientIp,
+        });
+
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: supplier.supplierId,
+            resourceType: 'SUPPLIER',
+            status: supplier.healthStatus,
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+          }),
+        );
+      },
+      {
+        body: SaveSupplierBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '创建供应商',
+          description: '后台新增供应商主体基础资料、接入账号和协议配置。',
+        },
+      },
+    )
+    .get(
+      '/admin/suppliers/:supplierId',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
+        return ok(requestId, await suppliersService.getSupplierById(params.supplierId));
+      },
+      {
+        response: createSuccessResponseSchema(SupplierSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询供应商详情',
+          description: '后台查询供应商联系人、协议、账号和健康状态详情。',
+        },
+      },
+    )
+    .put(
+      '/admin/suppliers/:supplierId',
+      async ({ body, params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
+        const supplier = await suppliersService.updateSupplier(params.supplierId, body);
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'UPDATE_SUPPLIER',
+          resourceType: 'SUPPLIER',
+          resourceId: supplier.supplierId,
+          details: body,
+          requestId,
+          ip: clientIp,
+        });
+
+        return ok(
+          requestId,
+          buildOperationResult({
+            resourceId: supplier.supplierId,
+            resourceType: 'SUPPLIER',
+            status: supplier.healthStatus,
+            operator: {
+              userId: operator.userId,
+              username: operator.username,
+              displayName: operator.displayName,
+            },
+          }),
+        );
+      },
+      {
+        body: SaveSupplierBodySchema,
+        response: createSuccessResponseSchema(OperationResultSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '更新供应商',
+          description: '后台修改供应商资料、接入账号、能力开关和合作状态。',
         },
       },
     )
@@ -96,6 +247,24 @@ export function createSuppliersRoutes({
       },
     )
     .get(
+      '/admin/suppliers/:supplierId/health',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
+        return ok(requestId, await suppliersService.getSupplierHealth({ supplierId: params.supplierId }));
+      },
+      {
+        response: createSuccessResponseSchema(SupplierHealthSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '查询供应商健康状态',
+          description: '后台查询供应商最近一次健康检查结果和成功失败时间。',
+        },
+      },
+    )
+    .get(
       '/admin/suppliers/:supplierId/balance',
       async ({ params, request }) => {
         const requestId = getRequestIdFromRequest(request);
@@ -108,10 +277,105 @@ export function createSuppliersRoutes({
         );
       },
       {
+        response: createSuccessResponseSchema(SupplierBalanceSchema),
         detail: {
           tags: ['admin'],
           summary: '查询供应商余额',
           description: '后台查询供应商账户余额与收益信息，用于运维巡检和额度预警。',
+        },
+      },
+    )
+    .post(
+      '/admin/suppliers/:supplierId/balance/refresh',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS']);
+        const result = await suppliersService.refreshSupplierBalance({ supplierId: params.supplierId });
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'REFRESH_SUPPLIER_BALANCE',
+          resourceType: 'SUPPLIER',
+          resourceId: params.supplierId,
+          details: { supplierId: params.supplierId },
+          requestId,
+          ip: clientIp,
+        });
+
+        return ok(requestId, result);
+      },
+      {
+        response: createSuccessResponseSchema(SupplierBalanceSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '刷新供应商余额',
+          description: '后台主动刷新供应商余额并返回最新快照。',
+        },
+      },
+    )
+    .get(
+      '/admin/suppliers/:supplierId/consumption-logs',
+      async ({ params, query, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
+        return ok(
+          requestId,
+          await suppliersService.listConsumptionLogs({
+            supplierId: params.supplierId,
+            startTime: typeof query.startTime === 'string' ? query.startTime : null,
+            endTime: typeof query.endTime === 'string' ? query.endTime : null,
+            mobile: typeof query.mobile === 'string' ? query.mobile : undefined,
+            orderNo: typeof query.orderNo === 'string' ? query.orderNo : undefined,
+            supplierOrderNo:
+              typeof query.supplierOrderNo === 'string' ? query.supplierOrderNo : undefined,
+          }),
+        );
+      },
+      {
+        query: SupplierConsumptionLogQuerySchema,
+        response: createSuccessResponseSchema(t.Array(SupplierConsumptionLogSchema)),
+        detail: {
+          tags: ['admin'],
+          summary: '查询供应商消费日志',
+          description: '后台查询供应商消费日志，支持按手机号、订单号和时间范围过滤。',
+        },
+      },
+    )
+    .get(
+      '/admin/suppliers/:supplierId/products',
+      async ({ params, query, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS']);
+        return ok(
+          requestId,
+          await suppliersService.listSupplierProducts({
+            supplierId: params.supplierId,
+            carrierCode: typeof query.carrierCode === 'string' ? query.carrierCode : undefined,
+            province: typeof query.province === 'string' ? query.province : undefined,
+            faceValue: query.faceValue ? Number(query.faceValue) : undefined,
+            status: typeof query.status === 'string' ? query.status : undefined,
+            updatedStartTime:
+              typeof query.updatedStartTime === 'string' ? query.updatedStartTime : null,
+            updatedEndTime:
+              typeof query.updatedEndTime === 'string' ? query.updatedEndTime : null,
+          }),
+        );
+      },
+      {
+        query: SupplierProductsQuerySchema,
+        response: createSuccessResponseSchema(t.Array(SupplierProductSnapshotSchema)),
+        detail: {
+          tags: ['admin'],
+          summary: '查询供应商产品快照',
+          description: '后台按供应商查询目录快照、库存状态和采购价。',
         },
       },
     )
@@ -200,6 +464,7 @@ export function createSuppliersRoutes({
         );
       },
       {
+        response: createSuccessResponseSchema(t.Array(t.Any())),
         detail: {
           tags: ['admin'],
           summary: '查询目录同步日志',
@@ -215,9 +480,10 @@ export function createSuppliersRoutes({
         const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
         const operator = await iamService.requireActiveAdmin(payload.sub);
         requireAnyAdminRole(operator, ['OPS']);
-        await suppliersService.upsertConfig({
+        const result = await suppliersService.upsertConfig({
           ...body,
           timeoutMs: body.timeoutMs ?? 2000,
+          updatedBy: operator.username,
         });
 
         await auditLogger({
@@ -235,14 +501,71 @@ export function createSuppliersRoutes({
           ip: clientIp,
         });
 
-        return ok(requestId, { success: true });
+        return ok(requestId, result);
       },
       {
         body: CreateSupplierConfigBodySchema,
+        response: createSuccessResponseSchema(SupplierConfigSchema),
         detail: {
           tags: ['admin'],
           summary: '配置供应商参数',
           description: '后台维护供应商凭证、回调密钥和超时策略等履约参数。',
+        },
+      },
+    )
+    .get(
+      '/admin/suppliers/:supplierId/recharge-records',
+      async ({ params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const admin = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(admin, ['OPS', 'FINANCE']);
+        return ok(requestId, await suppliersService.listRechargeRecords({ supplierId: params.supplierId }));
+      },
+      {
+        response: createSuccessResponseSchema(t.Array(SupplierRechargeRecordSchema)),
+        detail: {
+          tags: ['admin'],
+          summary: '查询供应商充值记录',
+          description: '后台查询供应商余额补款记录、来源和追踪信息。',
+        },
+      },
+    )
+    .post(
+      '/admin/suppliers/:supplierId/recharge-records',
+      async ({ body, params, request }) => {
+        const requestId = getRequestIdFromRequest(request);
+        const clientIp = getClientIpFromRequest(request);
+        const payload = await verifyAdminAuthorizationHeader(request.headers.get('authorization'));
+        const operator = await iamService.requireActiveAdmin(payload.sub);
+        requireAnyAdminRole(operator, ['OPS', 'FINANCE']);
+        const result = await suppliersService.createRechargeRecord({
+          supplierId: params.supplierId,
+          ...body,
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+        });
+
+        await auditLogger({
+          operatorUserId: operator.userId,
+          operatorUsername: operator.username,
+          action: 'CREATE_SUPPLIER_RECHARGE_RECORD',
+          resourceType: 'SUPPLIER_RECHARGE_RECORD',
+          resourceId: params.supplierId,
+          details: body,
+          requestId,
+          ip: clientIp,
+        });
+
+        return ok(requestId, result);
+      },
+      {
+        body: CreateSupplierRechargeRecordBodySchema,
+        response: createSuccessResponseSchema(SupplierRechargeRecordSchema),
+        detail: {
+          tags: ['admin'],
+          summary: '新增供应商充值记录',
+          description: '后台人工录入供应商充值记录并保留操作人与原始报文。',
         },
       },
     );
